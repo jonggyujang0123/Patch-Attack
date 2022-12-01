@@ -59,9 +59,10 @@ def get_data_loader(cfg, args, dataset):
 
 
 
-def loss_function(recon_x, x, mu ,log_var, beta=0.01, epsilon = 0.01):
+def loss_function(recon_x, x, mu ,log_var, beta=0.3, epsilon = 0.01):
     x = torch.clamp(x, 1e-8, 1-1e-8)
-    BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
+    BCE = F.mse_loss(recon_x, x, reduction='sum')
+    #BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
     KLD = -0.5 * torch.sum(1+log_var - mu.pow(2) - log_var.exp())
     return BCE + beta *  (KLD - epsilon)
 
@@ -116,11 +117,11 @@ def load_ckpt(checkpoint_fpath, is_best =False):
 def train(wandb, args, cfg, model):
     optimizer = optim.Adam(model.parameters(), lr =cfg.lr, betas = (cfg.beta_1, cfg.beta_2))
     train_loader, _, _ = get_data_loader(cfg=cfg, args= args, dataset=cfg.dataset)
-    fixed_noise = torch.FloatTensor(np.random.normal(0, 1, (cfg.test_batch_size, 64, cfg.latent_size))).to(cfg.device)# for visualization
     patch_u = patch_util(img_size= cfg.img_size,
             patch_size = cfg.patch_size,
             patch_margin = cfg.patch_margin,
             device = cfg.device)
+    fixed_noise = torch.FloatTensor(np.random.normal(0, 1, (cfg.test_batch_size, patch_u.num_patches, cfg.latent_size))).to(cfg.device)# for visualization
 
     if cfg.decay_type == "cosine":
         scheduler = WarmupCosineSchedule(optimizer, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
@@ -148,7 +149,7 @@ def train(wandb, args, cfg, model):
             inputs = data[0].to(cfg.device, non_blocking=True)
             patch, cond_img, pat_ind = patch_u.get_patch(inputs)
             recon_batch, mu, log_var = model.forward(patch, cond_img, pat_ind)
-            loss = loss_function(recon_batch, patch, mu, log_var)
+            loss = loss_function(recon_batch, patch, mu, log_var, beta= cfg.loss_beta)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -186,9 +187,9 @@ def test(wandb, args, cfg, model, fixed_noise = None, epoch = 0, dataset=None):
             patch_margin = cfg.patch_margin,
             device = cfg.device)
 
-    time_step = patch_u.num_patches//16
+    time_step = patch_u.num_patches
     if fixed_noise == None:
-        fixed_noise = torch.FloatTensor(np.random.normal(0, 1, (cfg.test_batch_size, 64, cfg.latent_size))).to(cfg.device)# for visualization
+        fixed_noise = torch.FloatTensor(np.random.normal(0, 1, (cfg.test_batch_size, patch_u.num_patches, cfg.latent_size))).to(cfg.device)# for visualization
     if dataset == None:
         _, _, test_loader = get_data_loader(cfg=cfg, args= args, dataset=cfg.dataset)
         # Free drawing
@@ -203,7 +204,7 @@ def test(wandb, args, cfg, model, fixed_noise = None, epoch = 0, dataset=None):
                     _, cond_img, pat_ind = patch_u.get_patch(inputs, pat_ind = pat_ind)
                     new_patch = model.decode(fixed_noise[:, pat_ind_const, :], cond_img, pat_ind)
                     inputs = patch_u.concat_patch(inputs, new_patch, pat_ind)
-#                    samples.append(inputs)
+                    samples.append(inputs)
             gif = rearrange(torch.cat(samples),
                     '(t b1 b2) c h w -> t (b1 h) (b2 w) c', b1=4, b2=4
                     ).cpu().numpy() 
@@ -230,6 +231,7 @@ def test(wandb, args, cfg, model, fixed_noise = None, epoch = 0, dataset=None):
                     pat_ind = torch.tensor(np.ones(shape=(cfg.test_batch_size,), dtype=int)).to(cfg.device) * pat_ind_const
                     patch, cond_img, pat_ind = patch_u.get_patch(inputs, pat_ind = pat_ind)
                     embedding, _ = model.encode(patch, cond_img, pat_ind)
+#                    print(embedding.abs().mean().item())
                     new_patch = model.decode(embedding, cond_img, pat_ind)
                     inputs = patch_u.concat_patch(inputs, new_patch, pat_ind)
                     samples.append(inputs)

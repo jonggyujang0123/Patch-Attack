@@ -1,21 +1,20 @@
 # ------ Default 
 weight_decay: 5.0e-4
 decay_type: "linear"
-epochs: 20000
-lr : 3.0e-2
+epochs: 8000
+lr : 3.0e-1
 seed : 0
 beta_1 : 0.5
 beta_2 : 0.99
-train_batch_size: 1024
+train_batch_size: 256
 test_batch_size: 256
-patch_size : 4
-patch_margin : 1
+patch_size : 2
+patch_margin : 4
 emb_size : 144
-pos_emb_size : 4
-latent_size : 32
+pos_emb_size : 2
+latent_size : 1
 warmup_steps : 100
 random_seed : 0
-eval_every : 10
 # ------ Dataset
 dataset: 'fashion'
 dataset_2:
@@ -29,12 +28,13 @@ num_workers : 8
 grayscale : True
 num_channel : 1
 attack_labelsmooth : 0.0
+interval_freeze : 2
 # Validation Setting"""
 interval_val : 200
 kl_every : 1
 lambda_attack : 1.0
 lambda_miner_entropy : 0.0
-lambda_kl : 1.0e-4
+lambda_kl : 3.0e-3
 # Save Path"""
 ckpt_fpath : '../experiments/attacker/emnist'
 ckpt_fpath_generator : '../experiments/generator/emnist'

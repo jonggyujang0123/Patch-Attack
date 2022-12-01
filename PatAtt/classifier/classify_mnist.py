@@ -14,7 +14,8 @@ import wandb
 """ ==========END================"""
 
 """ =========Configurable ======="""
-from models.resnet34 import R_34_MNIST as resnet
+#from models.resnet34 import R_34_MNIST as resnet
+from models.resnet18 import R_18_MNIST as resnet
 os.environ['WANDB_SILENT']='true'
 """ ===========END=========== """
 

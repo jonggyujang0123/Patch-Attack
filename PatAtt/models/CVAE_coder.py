@@ -37,18 +37,18 @@ class CVAE(nn.Module):
             raise Exception("unknown actiation function!")
 
         self.encoder = nn.Sequential(
-                nn.Linear(self.channel * patch_size**2 + emb_size + pos_emb_size, latent_size*8),
+                nn.Linear(self.channel * patch_size**2 + emb_size, latent_size*8),
                 activ,
                 nn.Linear(latent_size*8, latent_size*8),
                 activ,
                 nn.Linear(latent_size*8, latent_size*2)
                 )
         self.decoder = nn.Sequential(
-                nn.Linear(latent_size + pos_emb_size + emb_size, 400),
+                nn.Linear(latent_size + emb_size, 100),
                 activ,
-                nn.Linear(400, 400),
+                nn.Linear(100, 100),
                 activ,
-                nn.Linear(400, self.channel * patch_size **2),
+                nn.Linear(100, self.channel * patch_size **2),
                 nn.Sigmoid()
                 )
         self.embedder = nn.Embedding((img_size//patch_size)**2, pos_emb_size)
@@ -58,7 +58,7 @@ class CVAE(nn.Module):
         self.pe = torch.zeros(self.num_patches, pos_emb_size)
         position = torch.arange(0, self.num_patches).unsqueeze(1)
         div_term = torch.exp(
-                torch.arange(0, pos_emb_size, 2, dtype=torch.float) * -(math.log(480.0) / pos_emb_size)
+                torch.arange(0, pos_emb_size, 2, dtype=torch.float) * -(math.log(400.0) / pos_emb_size)
                 )
         self.pe[:, 0::2] = torch.sin(position.float() * div_term)
         self.pe[:, 1::2] = torch.cos(position.float() * div_term)
@@ -77,8 +77,9 @@ class CVAE(nn.Module):
             pos_emb_vec = self.pos_emb(pos)
         cond_freeze = cond.flatten(start_dim=1) #self.conditioner(cond.flatten(start_dim=1))
         cond = cond_freeze #self.conditioner(cond.flatten(start_dim=1))
-        cond = torch.cat([cond,pos_emb_vec], dim=1)
-        cond_freeze = torch.cat([cond_freeze,pos_emb_vec], dim=1)
+        #cond = torch.cat([cond,pos_emb_vec], dim=1)
+        #cond_freeze = torch.cat([cond_freeze,pos_emb_vec], dim=1)
+        #cond_freeze = torch.cat([cond_freeze,pos_emb_vec], dim=1)
         return cond, cond_freeze
 
 
@@ -90,6 +91,7 @@ class CVAE(nn.Module):
     def encode(self, x, cond, pos):
         cond, _ = self.conditioning( cond, pos)
         mean_var = self.encoder(torch.cat([x.flatten(start_dim=1),cond], dim=1))
+        #mean_var = self.encoder(x.flatten(start_dim=1))
         mean = mean_var[:,:self.latent_size]
         log_var = mean_var[:,self.latent_size::]
         

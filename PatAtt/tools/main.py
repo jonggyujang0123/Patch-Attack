@@ -17,8 +17,9 @@ from einops import rearrange
 """ ==========END================"""
 
 """ =========Configurable ======="""
-from models.resnet34 import R_34_MNIST as resnet
+from models.resnet18 import R_18_MNIST as resnet
 from models.miner import ReparameterizedMVN
+from models.miner_linear import ReparameterizedMVN_Linear
 from models.CVAE_coder import CVAE
 
 
@@ -122,7 +123,8 @@ def generate_img(
         model,
         cfg,
         w,
-        is_gif = False):
+        is_gif = False,
+        is_freeze = False):
     patch_u = patch_util(
             img_size = cfg.img_size,
             patch_size = cfg.patch_size,
@@ -132,7 +134,11 @@ def generate_img(
     samples = list()
     for pat_ind_const in range(patch_u.num_patches):
         pat_ind = torch.tensor(np.ones(shape=(w.shape[0],), dtype=int)).to(w.device) * pat_ind_const
-        _, cond_img, pat_ind = patch_u.get_patch(inputs, pat_ind = pat_ind)
+        if is_freeze:
+            with torch.no_grad():
+                _, cond_img, pat_ind = patch_u.get_patch(inputs, pat_ind = pat_ind)
+        else:
+            _, cond_img, pat_ind = patch_u.get_patch(inputs, pat_ind = pat_ind)
         new_patch = model.decode(w[:, pat_ind_const,:], cond_img, pat_ind)
         inputs = patch_u.concat_patch(inputs, new_patch, pat_ind)
         samples.append(inputs)
@@ -181,12 +187,13 @@ def train(wandb, args, cfg, classifier, generator, miner):
         fake = generate_img(
                 generator,
                 cfg,
-                w)
+                w,
+                is_freeze= epoch % cfg.interval_freeze != 0)
 
         # Compute Loss
         ## Classifier Loss
-        sigm = nn.Sigmoid()
-        LSM = torch.log(1e-3 + sigm(classifier(fake)))
+        sftm = nn.Softmax(dim = -1)
+        LSM = torch.log(1e-6 + sftm(classifier(fake)))
         fake_y = args.fixed_id * \
                 torch.ones(cfg.train_batch_size).to(cfg.device).long()
         loss_attack = attack_criterion(LSM, fake_y)
@@ -198,18 +205,23 @@ def train(wandb, args, cfg, classifier, generator, miner):
             loss_miner_entropy = 0
         ## KL Diverg Loss
         if epoch % cfg.kl_every ==0 and cfg.lambda_kl > 0:
-            C = torch.einsum('pkl,plj->pkj', miner.L ,miner.L.transpose(1,2))
+            samples = torch.randn(
+                cfg.train_batch_size, 
+                cfg.n_patch, 
+                cfg.latent_size
+                ).to(cfg.device)
+            C = miner.L @ miner.L.T 
+#            C = torch.einsum('pkl,plj->pkj', miner.L ,miner.L.transpose(1,2))
             loss_kl = (1/2) * (
-                    miner.m.pow(2).sum(dim=[1,2]) + \
-                            torch.diagonal(C, dim1 = 1, dim2 = 2).sum(-1) - \
-                            cfg.latent_size - \
-                            torch.logdet(C)
-                    ).mean()
+                            torch.norm(samples, p=2, dim=[-1]).pow(2).mean() - \
+                            torch.logdet(C+1e-6)
+                            ).sum()
         else:
             loss_kl = 0.0
         loss = cfg.lambda_attack * loss_attack + \
                 cfg.lambda_miner_entropy * loss_miner_entropy + \
                 cfg.lambda_kl * loss_kl
+        #print(f'loss kl : {loss_kl}, loss_attack : {loss_attack}')
         loss.backward()
         optimizer.step()
         scheduler.step() #optimizer.step()
@@ -218,7 +230,7 @@ def train(wandb, args, cfg, classifier, generator, miner):
         AvgAcc.update(train_acc, n =z.shape[0])
 
         if args.local_rank in [-1,0]:
-            pbar.set_description(f'Epoch {epoch}: train_loss: {AvgLoss.avg:2.2f}, lr : {scheduler.get_lr()[0]:.2E}, mean: {miner.m.abs().mean().item():.4f}')
+            pbar.set_description(f'Epoch {epoch}: train_loss: {AvgLoss.avg:2.2f}, lr : {scheduler.get_lr()[0]:.2E}, mean: {miner.m.abs().mean().item():.4f}, tr_acc : {AvgAcc.avg:.2f}')
 
         if epoch % cfg.interval_val == 0:
             if args.local_rank in [-1, 0]:
@@ -228,7 +240,8 @@ def train(wandb, args, cfg, classifier, generator, miner):
                         cfg = cfg,
                         classifier = classifier,
                         generator = generator,
-                        miner = miner)
+                        miner = miner,
+                        epoch = epoch)
                 model_to_save = miner.module if hasattr(miner, 'module') else miner
                 ckpt = {
                         'model': model_to_save.state_dict(),
@@ -248,13 +261,14 @@ def train(wandb, args, cfg, classifier, generator, miner):
                 print("-"*75+ "\n")
                 print(f"| {epoch}-th epoch, training loss is {AvgLoss.avg:.4f}, and Val Accuracy is {val_acc*100:2.2f}%\n")
                 print("-"*75+ "\n")
-        AvgLoss.reset()
+            AvgLoss.reset()
+            AvgAcc.reset()
     pbar.close()
 
 
-def evaluate(wandb, args, cfg, classifier, generator, miner):
+def evaluate(wandb, args, cfg, classifier, generator, miner, epoch = 0):
     val_acc = 0
-    time_step =16
+    time_step = 1#16
     if args.local_rank in [-1,0]:
         miner.eval()
         z = torch.randn(
@@ -285,6 +299,7 @@ def evaluate(wandb, args, cfg, classifier, generator, miner):
                 fps = 4,
                 format=  'gif'
                 )
+        wandb.log({f'reconstruct_{args.fixed_id}':gif}, step = epoch)
 
     return val_acc
 
@@ -325,7 +340,7 @@ def main():
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    miner = ReparameterizedMVN(
+    miner = ReparameterizedMVN_Linear(
             n_patch = cfg.n_patch,
             n_z = cfg.latent_size,
             ).to(cfg.device)

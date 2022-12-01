@@ -50,7 +50,8 @@ class patch_util():
 
         ## Generated Masked Conditional Images
         mask = self.mask[pat_ind, :] 
-        img_masked = self.pad(img * mask + (1-mask) * (-1) )
+        img_masked = self.pad(img * mask)
+#        img_masked = self.pad(img * mask + (1-mask) * (-1) )
         img_masked = img_masked.unfold(2, self.patch_size + self.patch_margin *2, self.patch_size).unfold(3, self.patch_size + self.patch_margin *2, self.patch_size)
         img_masked = img_masked.reshape(bs, img.shape[1], self.num_patches, self.patch_size + self.patch_margin*2, self.patch_size + self.patch_margin*2)
         # (bs, ch, num_patch, overlap_size, overlap_size)
