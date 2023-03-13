@@ -1,37 +1,39 @@
 """========Default import===="""
+from __future__ import print_function
 import argparse
-import os
 from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule
 import torch.nn as nn
 import torch
-import wandb
 import os
 import torch.optim as optim
 import shutil
 from tqdm import tqdm
 from easydict import EasyDict as edict
 import yaml
+import wandb
 """ ==========END================"""
 
 """ =========Configurable ======="""
-from models.resnet50 import R_50_MNIST as resnet
-#os.environ["WANDB_SILENT"] = 'true'
-
+#from models.resnet34 import R_34_MNIST as resnet
+from models.resnet18 import R_18_MNIST as resnet
+os.environ['WANDB_SILENT']='true'
 """ ===========END=========== """
+
+
 
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config",
             type=str, 
             help="Configuration file in configs.")
-    parser.add_argument("--multigpu",
-            type=bool, 
-            help="Local rank. Necessary for using the torch.distributed.launch utility.",
-            default= False)
     parser.add_argument("--resume",
             type=int,
             default= 0,
             help="Resume the last training from saved checkpoint.")
+    parser.add_argument("--multigpu",
+            type=bool, 
+            help="Local rank. Necessary for using the torch.distributed.launch utility.",
+            default= False)
     parser.add_argument("--test", 
             type=int,
             default = 0,
@@ -42,7 +44,8 @@ def parse_args():
 def get_data_loader(cfg, args):
     if cfg.dataset in ['cifar100', 'cifar10']:
         from datasets.cifar import get_loader_cifar as get_loader
-
+    if cfg.dataset in ['mnist']:
+        from datasets.mnist import get_loader_mnist as get_loader
     return get_loader(cfg, args)
 
 
@@ -264,7 +267,7 @@ def main():
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    model = resnet(num_classes=cfg.num_classes)
+    model = resnet(num_classes=cfg.num_classes, num_channel= cfg.num_channel)
     # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(cfg.device)
     if args.resume or args.test:

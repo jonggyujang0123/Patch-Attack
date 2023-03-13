@@ -1,4 +1,15 @@
-# Pytorch-Project-Template
+# Patch-Based Variational Model Inversion Attacker
+
+## Dependencies
+
+## Features
+
+## Train Classifier
+
+## Train/Download Common Generator
+
+## Execute Model Inversion Attacker
+
 
 ## Features
 - (multi-node/gpu) (training/validation/test)

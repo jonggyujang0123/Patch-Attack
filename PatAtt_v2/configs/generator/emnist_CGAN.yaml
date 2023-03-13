@@ -1,18 +1,18 @@
 # ------ Default 
 weight_decay: 5.0e-4
 decay_type: "linear"
-epochs: 100
-lr : 1.0e-2
+epochs: 300
+lr : 3.0e-4
 seed : 0
 beta_1 : 0.5
-beta_2 : 0.99
+beta_2 : 0.999
 train_batch_size: 256
-test_batch_size: 16
-patch_size : 8
-patch_margin : 4
-emb_size : 144
-pos_emb_size : 2
-latent_size : 16
+test_batch_size: 64
+patch_size : 4
+patch_margin : 2 
+latent_size : 3
+n_df : 16
+n_gf : 16
 warmup_steps : 100
 random_seed : 0
 eval_every : 10
@@ -27,16 +27,15 @@ num_classes : 10
 img_size : 32
 num_workers : 8
 grayscale : True
-loss_beta : 3.0e-4
 # Validation Setting"""
 interval_val : 1 
 
 # Save Path"""
-ckpt_fpath : '../experiments/generator/emnist'
+ckpt_fpath : '../experiments/generator/emnist_cgan'
 
 # WANDB SETTINGS"""
 wandb:
-  project : 'generator_EMNIST'
+  project : 'generator_EMNIST_CGAN'
   id : 'jonggyujang0123'
   name : 'ResNet50_lr'
   active : True

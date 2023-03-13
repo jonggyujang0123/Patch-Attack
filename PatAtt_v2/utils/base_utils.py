@@ -3,6 +3,54 @@ import numpy as np
 import random
 from torch.optim.lr_scheduler import LambdaLR
 import math
+import os 
+import shutil
+def load_ckpt(checkpoint_fpath, is_best =False):
+    """
+    Latest checkpoint loader
+        checkpoint_fpath : 
+    :return: dict
+        checkpoint{
+            model,
+            optimizer,
+            epoch,
+            scheduler}
+    example :
+    """
+    if is_best:
+        ckpt_path = checkpoint_fpath+'/'+'best.pt'
+    else:
+        ckpt_path = checkpoint_fpath+'/'+'checkpoint.pt'
+    try:
+        print(f"Loading checkpoint '{ckpt_path}'")
+        checkpoint = torch.load(ckpt_path)
+    except:
+        print(f"No checkpoint exists from '{ckpt_path}'. Skipping...")
+        print("**First time to train**")
+    return checkpoint
+
+
+def save_ckpt(checkpoint_fpath, checkpoint, is_best=False):
+    """
+    Checkpoint saver
+    :checkpoint_fpath : directory of the saved file
+    :checkpoint : checkpoiint directory
+    :return:
+    """
+    ckpt_path = checkpoint_fpath+'/'+'checkpoint.pt'
+    # Save the state
+    if not os.path.exists(checkpoint_fpath):
+        os.makedirs(checkpoint_fpath)
+    torch.save(checkpoint, ckpt_path)
+    # If it is the best copy it to another file 'model_best.pth.tar'
+#    print("Checkpoint saved successfully to '{}' at (epoch {})\n"
+#        .format(ckpt_path, checkpoint['epoch']))
+    if is_best:
+        ckpt_path_best = checkpoint_fpath+'/'+'best.pt'
+#        print("This is the best model\n")
+        shutil.copyfile(ckpt_path,
+                        ckpt_path_best)
+
 
 def set_random_seeds(random_seed=0):
     torch.manual_seed(random_seed)
@@ -100,3 +148,8 @@ class WarmupCosineSchedule(LambdaLR):
         # progress after warmup
         progress = float(step - self.warmup_steps) / float(max(1, self.t_total - self.warmup_steps))
         return max(0.0, 0.5 * (1. + math.cos(math.pi * float(self.cycles) * 2.0 * progress)))
+
+
+def set_grad(model, flag=True):
+    for p in model.parameters():
+        p.requires_grad= flag

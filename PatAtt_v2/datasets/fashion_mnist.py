@@ -11,42 +11,26 @@ from torchvision import datasets, transforms
 
 
 
-def get_loader_emnist(cfg, args):
+def get_loader_fashion_mnist(args):
     transform_train = transforms.Compose([
-                                    transforms.RandomHorizontalFlip(p=.5),
-                                    transforms.RandomVerticalFlip(p=.5),
-                                    transforms.RandomAffine(45),
-                                    transforms.ColorJitter(
-                                        brightness = (0.7, 2),
-                                        contrast=(0.7, 2),
-                                        ),
-#                                    transforms.RandomPerspective(distortion_scale=0.6, p=1.0),
-                                    transforms.Resize((cfg.img_size, cfg.img_size)),
-#                                    transforms.AugMix(),
+                                    transforms.Resize((args.img_size, args.img_size)),
                                     transforms.ToTensor()])
-#                                    transforms.Normalize((0.5,), (0.5,))])
     transform_val = transforms.Compose([
-                                    lambda img: transforms.functional.rotate(img, -90),
-                                    lambda img: transforms.functional.hflip(img),
-                                    transforms.Resize((cfg.img_size, cfg.img_size)),
+                                    transforms.Resize((args.img_size, args.img_size)),
                                     transforms.ToTensor()])
-#                                    transforms.Normalize((0.5,), (0.5,))])
     transform_test = transform_val
 
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
-    dataset_train = datasets.EMNIST('../data',
-                                    split= 'letters',
+    dataset_train = datasets.FashionMNIST('../data', 
                                     train=True, 
                                     download=True,
                                     transform=transform_train)
-    dataset_val = datasets.EMNIST('../data', 
-                                    split ='letters',
+    dataset_val = datasets.FashionMNIST('../data', 
                                     train=False, 
                                     download=True,
                                     transform=transform_val)
-    dataset_test = datasets.EMNIST('../data', 
-                                    split = 'letters',
+    dataset_test = datasets.FashionMNIST('../data', 
                                     train=False, 
                                     download=True,
                                     transform=transform_test)
@@ -61,17 +45,17 @@ def get_loader_emnist(cfg, args):
     test_sampler = RandomSampler(dataset_test) if args.local_rank == -1 else DistributedSampler(dataset_test)
     train_loader = DataLoader(dataset_train,
                               sampler=train_sampler,
-                              batch_size = cfg.train_batch_size,
-                              num_workers = cfg.num_workers,
-                              pin_memory=cfg.pin_memory)
+                              batch_size = args.train_batch_size,
+                              num_workers = args.num_workers,
+                              pin_memory=args.pin_memory)
     val_loader = DataLoader(dataset_val,
                               sampler=val_sampler,
-                              batch_size = cfg.train_batch_size,
-                              num_workers = cfg.num_workers,
-                              pin_memory=cfg.pin_memory) 
+                              batch_size = args.train_batch_size,
+                              num_workers = args.num_workers,
+                              pin_memory=args.pin_memory) 
     test_loader = DataLoader(dataset_test,
                               sampler=test_sampler,
-                              batch_size = cfg.test_batch_size,
-                              num_workers = cfg.num_workers,
-                              pin_memory=cfg.pin_memory)
+                              batch_size = args.test_batch_size,
+                              num_workers = args.num_workers,
+                              pin_memory=args.pin_memory)
     return train_loader, val_loader, test_loader
