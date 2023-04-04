@@ -41,6 +41,9 @@ def para_config():
     parser.add_argument("--patch-size",
             type=int,
             default=8)
+    parser.add_argument("--patch-stride",
+            type=int,
+            default=2)
     parser.add_argument("--patch-target",
             type=int,
             default=4)
@@ -58,11 +61,11 @@ def para_config():
             type=int,
             default=16,
             help="number of discriminator feature base")
-    parser.add_argument("--level_g",
+    parser.add_argument("--level-g",
             type=int,
             default=2,
             help="level of Conv layer in Generator")
-    parser.add_argument("--level_d",
+    parser.add_argument("--level-d",
             type=int,
             default=4,
             help="level of Conv layer in Discrim")
@@ -75,6 +78,12 @@ def para_config():
     parser.add_argument("--w-recon",
             type=float,
             default=0.0)
+    parser.add_argument("--w-student",
+            type=float,
+            default=0.5)
+    parser.add_argument("--w-oh",
+            type=float,
+            default=0.1)
     parser.add_argument("--attack-labelsmooth",
             type=float,
             default=0.0)
@@ -84,6 +93,9 @@ def para_config():
     parser.add_argument("--p-flip",
             type=float,
             default=0.0)
+    parser.add_argument("--n-student",
+            type=int,
+            default=4)
 
     # dataset 
     parser.add_argument("--dataset",
@@ -111,6 +123,10 @@ def para_config():
     parser.add_argument("--ckpt-fpath-class",
             type=str,
             default="../experiments/classifier/mnist",
+            help="path for restoring the classifier")
+    parser.add_argument("--ckpt-fpath-class-val",
+            type=str,
+            default="../experiments/classifier/mnist_val",
             help="path for restoring the classifier")
 
     # WANDB SETTINGS

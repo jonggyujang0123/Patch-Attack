@@ -1,5 +1,7 @@
 """Import default libraries"""
 import os
+
+import torchvision
 from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt
 from utils.parameters import para_config
 import torch.nn as nn
@@ -13,8 +15,9 @@ from einops import rearrange
 from torchvision.transforms import Pad 
 
 """import target classifier, generator, and discriminator """
-from models.resnet18 import R_18_MNIST as resnet
+from models.resnet import resnet10
 from models.CGAN import Generator, Discriminator
+from models.distill import student
 #from models.miner import ReparameterizedMVN
 #from models.miner_linear import ReparameterizedMVN_Linear, ReparameterizedGMM_Linear, gaussian_logp
 #from models.CVAE_coder import CVAE
@@ -64,8 +67,10 @@ def random_patch(imgs, args):
         if not args.patch_rand:
             idx[:,:] = idx[0:1,:] 
         for i, (y1, x1) in enumerate(idx):
-            y2 =  y1 + np.random.randint(args.patch_size*2)
-            x2 =  x1 + np.random.randint(args.patch_size*2)
+            y2 = y1 + args.patch_size
+            x2 = x1 + args.patch_size
+#            y2 =  y1 + np.random.randint(args.patch_size*2)
+#            x2 =  x1 + np.random.randint(args.patch_size*2)
 #            patches.append(imgs[i:i+1, :, y1:y2, x1:x2])
             mask_img[i, :, max(0,y1-padding):min(y2 - padding,args.img_size), max(0,x1-padding):min(x2-padding,args.img_size)] = 1
     return mask_img
@@ -79,7 +84,7 @@ def noisy_labels(y, p_flip):
     return y
 
 
-def train(wandb, args, classifier, G, D):
+def train(wandb, args, classifier, classifier_val, G, D):
     fixed_z = torch.randn(
             args.test_batch_size, 
             args.latent_size,
@@ -93,6 +98,11 @@ def train(wandb, args, classifier, G, D):
     optimizer_g = optim.Adam(G.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     optimizer_d = optim.Adam(D.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     train_loader, _, _ = get_data_loader(args= args)
+    if args.n_student>0:
+        students = student(
+                warmup_steps=args.warmup_steps, 
+                t_total= args.epochs * len(train_loader),
+                n_student=args.n_student).to(args.device)
     if args.decay_type == "cosine":
         scheduler_g = WarmupCosineSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
         scheduler_d = WarmupCosineSchedule(optimizer_d, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
@@ -111,21 +121,27 @@ def train(wandb, args, classifier, G, D):
         start_epoch = ckpt['epoch']+1
     Loss_g = AverageMeter()
     Loss_d = AverageMeter()
+    Loss_s = AverageMeter()
     D_x_total = AverageMeter()
     D_G_z_total = AverageMeter()
-    Acc_total = AverageMeter()
+    Acc_total_t = AverageMeter()
+    Acc_total_s = AverageMeter()
 
     pbar = tqdm(
             range(start_epoch,args.epochs),
-            disable = args.local_rank not in [-1,0]
+            disable = args.local_rank not in [-1,0],
+            bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
             )
+#    pad = Pad(args.patch_size - args.patch_stride, fill=0)
     # Prepare dataset and dataloader
     for epoch in pbar:
         # Switch Training Mode
         G.train()
         D.train()
         tepoch = tqdm(train_loader,
-                disable=args.local_rank not in [-1,0])
+                disable=args.local_rank not in [-1,0],
+                bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
+                )
         for data in tepoch:
             # (1) Update Discriminator (real data)
             optimizer_d.zero_grad()
@@ -133,21 +149,27 @@ def train(wandb, args, classifier, G, D):
                     non_blocking=True)
 #            inputs += LSM = torch.log(1e-6 + sftm(classifier( (fake+1)/2.0 + (0.5 + 0.05*(args.epochs - epoch) / args.epochs) * torch.randn_like(fake, device=fake.device))))
 #            patches_org, _, _ = random_patch(inputs, args)
-            mask = random_patch(inputs, args)
+#            mask = random_patch(inputs, args)
 #            patches_org = inputs * mask_org -1 * (1-mask_org)
-#            patches_org = inputs.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).reshape(-1, args.num_channel, args.patch_size, args.patch_size)
-            real_target = torch.ones(mask.size(0)).to(args.device) * 0.9 
-            real_target = noisy_labels(real_target, args.p_flip)
-            fake_target = torch.zeros(mask.size(0)).to(args.device)
-            fake_target = noisy_labels(fake_target, args.p_flip)
+#            patches_org= pad(inputs).unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).reshape(-1, args.num_channel, args.patch_size, args.patch_size)
+#            rand_ind = np.random.choice(np.arange(patches_org.shape[0]), patches_org.shape[0]//20)
+#            patches_org = patches_org[rand_ind, :,:,:]
 #            torch.full((patches_org.size(0),),
 #                    real_label,
 #                    dtype=torch.float,
 #                    device=args.device)
-            err_real_d = generator_criterion(D(inputs.detach() * mask).view(-1),real_target - args.gan_labelsmooth)
+#            err_real_d = generator_criterion(D(inputs.detach() * mask).view(-1),real_target - args.gan_labelsmooth)
+            d_logit_t = D(inputs)
+            real_target = torch.ones(d_logit_t.size(0)).to(args.device) #* 0.9 
+            real_target = noisy_labels(real_target, args.p_flip)
+            fake_target = torch.zeros(d_logit_t.size(0)).to(args.device)
+            fake_target = noisy_labels(fake_target, args.p_flip)
+            err_real_d = generator_criterion(d_logit_t.view(-1),real_target - args.gan_labelsmooth)
             if args.local_rank in [-1,0]:
-                D_x = D(inputs*mask).view(-1).detach().mean().item()
-                D_x_total.update(D_x, mask.size(0))
+                D_x = d_logit_t.view(-1).detach().mean().item()
+#                D_x = D(inputs*mask).view(-1).detach().mean().item()
+#                D_x_total.update(D_x, mask.size(0))
+                D_x_total.update(D_x, d_logit_t.size(0))
             err_real_d.backward()
 #            optimizer_d.step()
 
@@ -160,31 +182,45 @@ def train(wandb, args, classifier, G, D):
             fake = G(latent_vector, c)
 
 #            patches_fake, mask_fake, mask_fake_img = random_patch(fake, args)
-#            patches_fake = fake * mask_fake -1 * (1-mask_fake)
-            fake_masked = fake * mask 
-#            patches_fake = fake.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).reshape(-1, args.num_channel, args.patch_size, args.patch_size)
+#            fake_masked = fake * mask 
+#            patches_fake = pad(fake).unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).reshape(-1, args.num_channel, args.patch_size, args.patch_size)
+#            patches_fake = patches_fake[rand_ind, :,:,:]
 #            outputs = D(patches_fake.detach()).view(-1)
-            err_fake_d = generator_criterion(D(fake_masked.detach()).view(-1), fake_target)
+#            err_fake_d = generator_criterion(D(fake_masked.detach()).view(-1), fake_target)
+            d_logit_f = D(fake.detach())
+            err_fake_d = generator_criterion(d_logit_f.view(-1), fake_target)
             err_fake_d.backward()
             optimizer_d.step()
             if args.local_rank in [-1, 0]:
                 err_d = (err_fake_d + err_real_d)/2
-                Loss_d.update(err_d.detach().mean().item(), mask.size(0))
+#                Loss_d.update(err_d.detach().mean().item(), mask.size(0))
+                Loss_d.update(err_d.detach().mean().item(), d_logit_t.size(0))
 
             # (3) Generator update
             optimizer_g.zero_grad()
 #            label.fill_(real_label)
-            outputs = D(fake_masked).view(-1)
+#            outputs = D(fake_masked).view(-1)
+            outputs = D(fake).view(-1)
             err_g = generator_criterion(outputs, real_target)
             sftm = nn.Softmax(dim = -1)
             target_id = c
 #            target_id = args.fixed_id * \
 #                    torch.ones(fake.size(0)).to(cfg.device).long()
-#            fake_masked = fake * mask_fake_img + fake.detach() * (1-mask_fake_img)
+#            fake_masked = fake * mask_fake_img + fake.detach() * (1-mask_fake_img)\
 #            LSM = torch.log(1e-6 + sftm(classifier( (fake+1)/2.0 + (0.5 + 0.05*(args.epochs - epoch) / args.epochs) * torch.randn_like(fake, device=fake.device))))
-            LSM = torch.log(1e-6 + sftm(classifier((fake+1)/2.0)))
+#            LSM = torch.log(1e-6 + students.forward(fake))
+#            LSM = torch.log(1e-6 + sftm(classifier((fake+1)/2.0)))
+#            fake_g = fake * mask + fake.detach() * (1-mask)
+            fake_g = fake
+            sftm_target = sftm(classifier(fake_g))
+            if args.n_student > 0:
+                sftm_student, oh_loss = students.forward(fake_g)
+                LSM = torch.log(1e-6 + (1-args.w_student) * sftm_target + args.w_student * sftm_student)
+            else:
+                oh_loss = 0.0
+                LSM = torch.log(1e-6 + sftm_target)
             loss_attack = attack_criterion(LSM, target_id)
-            loss_gen = err_g + args.w_attack * loss_attack
+            loss_gen = err_g + args.w_attack * loss_attack + args.w_oh * oh_loss
             loss_gen.backward()
             optimizer_g.step()
 
@@ -201,16 +237,24 @@ def train(wandb, args, classifier, G, D):
 
             scheduler_d.step()
             scheduler_g.step()
-
-            train_acc = LSM[torch.arange(c.size(0)),c].exp().mean().item()
+            # (4) Distillation
+            if args.n_student > 0:
+                loss_s = students.update(fake.detach(), sftm_target.detach()).detach().item()
+                train_acc_student = sftm_student[torch.arange(c.size(0)),c].mean().item()
+            else:
+                loss_s = 0.0
+                train_acc_student = 0.0
+            train_acc_target = sftm_target[torch.arange(c.size(0)),c].mean().item()
             if args.local_rank in [-1, 0]:
-                Acc_total.update(train_acc, inputs.size(0))
+                Acc_total_t.update(train_acc_target, inputs.size(0))
+                Acc_total_s.update(train_acc_student, inputs.size(0))
                 Loss_g.update(err_g.detach().item(), inputs.size(0))
+                Loss_s.update(loss_s, inputs.size(0))
                 D_G_z_total.update(outputs.mean().item(), inputs.size(0))
-                tepoch.set_description(f'Epoch {epoch}: Loss_D : {Loss_d.avg:2.3f}, Loss_G: {Loss_g.avg:2.3f}, lr is {scheduler_d.get_lr()[0]:.2E}, acc:{Acc_total.avg:2.3f}')
-        # (4) After end of epoch, save result model
+                tepoch.set_description(f'Epoch {epoch}: Loss_D : {Loss_d.avg:2.3f}, Loss_G: {Loss_g.avg:2.3f}, Loss_St: {Loss_s.avg:2.3f}, lr is {scheduler_d.get_lr()[0]:.2E}, acc_t:{Acc_total_t.avg:2.3f}, acc_s:{Acc_total_s.avg:2.3f}')
+        # (5) After end of epoch, save result model
         if epoch % args.eval_every == 0:
-            evaluate(wandb, args, classifier, G, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
+            evaluate(wandb, args, classifier_val, G, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
 
         if args.local_rank in [-1,0]:
             model_to_save_g = G.module if hasattr(G, 'module') else G
@@ -231,7 +275,8 @@ def train(wandb, args, classifier, G, D):
                     "Loss_G" : Loss_g.avg,
                     "D(x)" : D_x_total.avg,
                     "D(G(z))" : D_G_z_total.avg,
-                    "val_acc" : Acc_total.avg
+                    "val_acc_t" : Acc_total_t.avg,
+                    "val_acc_s" : Acc_total_s.avg
                     },
                     step = epoch)
 #            print("-"*75+ "\n")
@@ -239,8 +284,11 @@ def train(wandb, args, classifier, G, D):
 #            print("-"*75+ "\n")
         Loss_g.reset()
         Loss_d.reset()
+        Loss_s.reset()
         D_G_z_total.reset()
         D_x_total.reset()
+        Acc_total_t.reset()
+        Acc_total_s.reset()
         if args.multigpu:
             torch.distributed.barrier()
 
@@ -257,7 +305,7 @@ def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0
     val_acc = 0
     if args.local_rank in [-1,0]:
         fake = G(fixed_z, fixed_c)
-        pred = classifier( (fake+1)/2.0 )
+        pred = classifier( fake)
         fake_y = fixed_c
 #        fake_y = args.fixed_id * \
 #                torch.ones(cfg.test_batch_size).to(cfg.device)
@@ -307,7 +355,11 @@ def main():
 
     # Encapsulate the model on the GPU assigned to the current process
 
-    classifier = resnet(
+    classifier = resnet10(
+            num_classes= args.n_classes,
+            num_channel= args.num_channel,
+            ).to(args.device)
+    classifier_val = resnet10(
             num_classes= args.n_classes,
             num_channel= args.num_channel,
             ).to(args.device)
@@ -320,13 +372,17 @@ def main():
             n_c = args.num_channel,
             ).to(args.device)
     D = Discriminator(
-            patch_size = args.img_size,
+            img_size = args.img_size,
+            patch_size = args.patch_size,
+            patch_stride= args.patch_stride,
             n_df = args.n_df,
             levels= args.level_d,
-            n_c = args.num_channel
+            n_c = args.num_channel, 
+            batch_size = args.train_batch_size
             ).to(args.device)
-    G.weight_init()
-    D.weight_init()
+#    G.weight_init()
+#    D.weight_init()
+
 
     if os.path.exists(args.ckpt_fpath_class):
         ckpt = load_ckpt(args.ckpt_fpath_class, is_best = True)
@@ -336,6 +392,13 @@ def main():
     else:
         raise Exception('there is no generative checkpoint')
 
+    if os.path.exists(args.ckpt_fpath_class_val):
+        ckpt = load_ckpt(args.ckpt_fpath_class_val, is_best = True)
+        classifier_val.load_state_dict(ckpt['model'])
+        classifier_val.eval()
+        print(f'{args.ckpt_fpath_class_val} model is loaded!')
+    else:
+        raise Exception('there is no generative checkpoint')
     # Load target classifier 
     if args.multigpu:
         G = torch.nn.parallel.DistributedDataParallel(G, device_ids=[args.local_rank], output_device=args.local_rank)
@@ -348,9 +411,9 @@ def main():
         D.load_state_dict(ckpt['model_d'])
 
     if args.test:
-        evaluate(wandb, args, classifier, G)
+        evaluate(wandb, args,  classifier_val, G)
     else:
-        train(wandb, args, classifier, G, D)
+        train(wandb, args, classifier, classifier_val, G, D)
 
 
 if __name__ == '__main__':

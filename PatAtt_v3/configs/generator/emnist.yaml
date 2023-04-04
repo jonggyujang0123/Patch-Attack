@@ -1,0 +1,38 @@
+# ------ Default 
+weight_decay: 5.0e-4
+decay_type: "cosine"
+use_amp: False        # Use automatic mixed precision
+epochs: 20
+lr : 2.0e-3
+seed : 0
+beta_1 : 0.5
+beta_2 : 0.99
+train_batch_size: 128
+test_batch_size: 16
+patch_size : 4
+initialize_size : 4
+latent_dim : 1024
+warmup_steps : 100
+random_seed : 0
+extend_size : 2
+blocks : 4
+# ------ Dataset
+dataset: 'emnist'
+pin_memory : True
+num_classes : 10
+img_size : 32
+num_workers : 8
+grayscale : True
+
+# Validation Setting"""
+interval_val : 1 
+
+# Save Path"""
+ckpt_fpath : '../experiments/generator/emnist'
+
+# WANDB SETTINGS"""
+wandb:
+  project : 'generator_EMNIST'
+  id : 'jonggyujang0123'
+  name : 'ResNet50_lr'
+  active : True
