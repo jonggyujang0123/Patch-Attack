@@ -44,15 +44,9 @@ def para_config():
     parser.add_argument("--patch-stride",
             type=int,
             default=2)
-    parser.add_argument("--patch-target",
-            type=int,
-            default=4)
-    parser.add_argument("--patch-rand",
-            type=bool, 
-            default= False)
-    parser.add_argument("--patch-num",
-            type=int, 
-            default= 3)
+    parser.add_argument("--keep-ratio",
+            type=float,
+            default=0.03)
     parser.add_argument("--n-gf",
             type=int,
             default=64,
@@ -78,12 +72,6 @@ def para_config():
     parser.add_argument("--w-recon",
             type=float,
             default=0.0)
-    parser.add_argument("--w-student",
-            type=float,
-            default=0.5)
-    parser.add_argument("--w-oh",
-            type=float,
-            default=0.1)
     parser.add_argument("--attack-labelsmooth",
             type=float,
             default=0.0)
@@ -93,9 +81,6 @@ def para_config():
     parser.add_argument("--p-flip",
             type=float,
             default=0.0)
-    parser.add_argument("--n-student",
-            type=int,
-            default=4)
 
     # dataset 
     parser.add_argument("--dataset",

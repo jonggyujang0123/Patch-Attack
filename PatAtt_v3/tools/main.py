@@ -17,7 +17,7 @@ from torchvision.transforms import Pad
 """import target classifier, generator, and discriminator """
 from models.resnet import resnet10
 from models.CGAN import Generator, Discriminator
-from models.distill import student
+#from models.distill import student
 #from models.miner import ReparameterizedMVN
 #from models.miner_linear import ReparameterizedMVN_Linear, ReparameterizedGMM_Linear, gaussian_logp
 #from models.CVAE_coder import CVAE
@@ -54,28 +54,6 @@ class LabelSMoothingLoss(nn.Module):
         true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
         return torch.mean(torch.sum( - true_dist * lsm,  dim = self.dim))
 
-def random_patch(imgs, args):
-#    patches = list()
-    padding = (args.patch_size - args.patch_target)//2
-    mask_img = torch.zeros_like(imgs).to(imgs.device)
-#    pad = Pad(padding + args.patch_target, fill=-1)
-#    imgs = pad(imgs)
-#    mask_patch = torch.zeros(1, 1, args.patch_size, args.patch_size).to(imgs.device)
-#    mask_patch[:,:, padding: args.patch_size - padding, padding: args.patch_size - padding] = 1
-    for i in range(args.patch_num):
-        idx = np.random.randint(0, imgs.size(3) + 2 * padding - args.patch_size, (imgs.size(0), 2))
-        if not args.patch_rand:
-            idx[:,:] = idx[0:1,:] 
-        for i, (y1, x1) in enumerate(idx):
-            y2 = y1 + args.patch_size
-            x2 = x1 + args.patch_size
-#            y2 =  y1 + np.random.randint(args.patch_size*2)
-#            x2 =  x1 + np.random.randint(args.patch_size*2)
-#            patches.append(imgs[i:i+1, :, y1:y2, x1:x2])
-            mask_img[i, :, max(0,y1-padding):min(y2 - padding,args.img_size), max(0,x1-padding):min(x2-padding,args.img_size)] = 1
-    return mask_img
-#    return torch.cat(patches,dim=0), mask_patch, mask_img
-    
 def noisy_labels(y, p_flip):
     # choose labels to flip
     flip_ix = np.random.choice(y.size(0), int(y.size(0) *  p_flip))
@@ -98,11 +76,11 @@ def train(wandb, args, classifier, classifier_val, G, D):
     optimizer_g = optim.Adam(G.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     optimizer_d = optim.Adam(D.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     train_loader, _, _ = get_data_loader(args= args)
-    if args.n_student>0:
-        students = student(
-                warmup_steps=args.warmup_steps, 
-                t_total= args.epochs * len(train_loader),
-                n_student=args.n_student).to(args.device)
+#    if args.n_student>0:
+#        students = student(
+#                warmup_steps=args.warmup_steps, 
+#                t_total= args.epochs * len(train_loader),
+#                n_student=args.n_student).to(args.device)
     if args.decay_type == "cosine":
         scheduler_g = WarmupCosineSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
         scheduler_d = WarmupCosineSchedule(optimizer_d, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
@@ -213,14 +191,15 @@ def train(wandb, args, classifier, classifier_val, G, D):
 #            fake_g = fake * mask + fake.detach() * (1-mask)
             fake_g = fake
             sftm_target = sftm(classifier(fake_g))
-            if args.n_student > 0:
-                sftm_student, oh_loss = students.forward(fake_g)
-                LSM = torch.log(1e-6 + (1-args.w_student) * sftm_target + args.w_student * sftm_student)
-            else:
-                oh_loss = 0.0
-                LSM = torch.log(1e-6 + sftm_target)
+#            if args.n_student > 0:
+#                sftm_student, oh_loss = students.forward(fake_g)
+#                LSM = torch.log(1e-6 + (1-args.w_student) * sftm_target + args.w_student * sftm_student)
+#            else:
+#                oh_loss = 0.0
+            LSM = torch.log(1e-6 + sftm_target)
             loss_attack = attack_criterion(LSM, target_id)
-            loss_gen = err_g + args.w_attack * loss_attack + args.w_oh * oh_loss
+#            loss_gen = err_g + args.w_attack * loss_attack + args.w_oh * oh_loss
+            loss_gen = err_g + args.w_attack * loss_attack 
             loss_gen.backward()
             optimizer_g.step()
 
@@ -238,20 +217,20 @@ def train(wandb, args, classifier, classifier_val, G, D):
             scheduler_d.step()
             scheduler_g.step()
             # (4) Distillation
-            if args.n_student > 0:
-                loss_s = students.update(fake.detach(), sftm_target.detach()).detach().item()
-                train_acc_student = sftm_student[torch.arange(c.size(0)),c].mean().item()
-            else:
-                loss_s = 0.0
-                train_acc_student = 0.0
+#            if args.n_student > 0:
+#                loss_s = students.update(fake.detach(), sftm_target.detach()).detach().item()
+#                train_acc_student = sftm_student[torch.arange(c.size(0)),c].mean().item()
+#            else:
+#                loss_s = 0.0
+#                train_acc_student = 0.0
             train_acc_target = sftm_target[torch.arange(c.size(0)),c].mean().item()
             if args.local_rank in [-1, 0]:
                 Acc_total_t.update(train_acc_target, inputs.size(0))
-                Acc_total_s.update(train_acc_student, inputs.size(0))
+#                Acc_total_s.update(train_acc_student, inputs.size(0))
                 Loss_g.update(err_g.detach().item(), inputs.size(0))
-                Loss_s.update(loss_s, inputs.size(0))
+#                Loss_s.update(loss_s, inputs.size(0))
                 D_G_z_total.update(outputs.mean().item(), inputs.size(0))
-                tepoch.set_description(f'Epoch {epoch}: Loss_D : {Loss_d.avg:2.3f}, Loss_G: {Loss_g.avg:2.3f}, Loss_St: {Loss_s.avg:2.3f}, lr is {scheduler_d.get_lr()[0]:.2E}, acc_t:{Acc_total_t.avg:2.3f}, acc_s:{Acc_total_s.avg:2.3f}')
+                tepoch.set_description(f'Epoch {epoch}: Loss_D : {Loss_d.avg:2.3f}, Loss_G: {Loss_g.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}')
         # (5) After end of epoch, save result model
         if epoch % args.eval_every == 0:
             evaluate(wandb, args, classifier_val, G, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
@@ -276,7 +255,6 @@ def train(wandb, args, classifier, classifier_val, G, D):
                     "D(x)" : D_x_total.avg,
                     "D(G(z))" : D_G_z_total.avg,
                     "val_acc_t" : Acc_total_t.avg,
-                    "val_acc_s" : Acc_total_s.avg
                     },
                     step = epoch)
 #            print("-"*75+ "\n")
@@ -333,7 +311,7 @@ def main():
                    entity = args.wandb_id,
                    config = args,
                    name = f'{args.wandb_name}_lr:{args.lr}',
-                   group = f'{args.dataset}_P{args.patch_size}_S{args.patch_target}'
+                   group = f'{args.dataset}_P{args.patch_size}_S{args.patch_stride}'
                    )
     if args.local_rank in [-1,0]:
         print(args)
@@ -378,7 +356,8 @@ def main():
             n_df = args.n_df,
             levels= args.level_d,
             n_c = args.num_channel, 
-            batch_size = args.train_batch_size
+            batch_size = args.train_batch_size,
+            keep_ratio = args.keep_ratio
             ).to(args.device)
 #    G.weight_init()
 #    D.weight_init()

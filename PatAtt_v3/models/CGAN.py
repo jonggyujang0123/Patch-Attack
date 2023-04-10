@@ -98,7 +98,8 @@ class Discriminator(nn.Module):
             levels=4,
             n_df = 16,
             n_c=3,
-            batch_size = 64):
+            batch_size = 64,
+            keep_ratio = 0.03):
         super().__init__()
         self.pad = Pad(patch_size - patch_stride, fill=0)
         self.img_size = img_size
@@ -106,6 +107,7 @@ class Discriminator(nn.Module):
         self.patch_stride= patch_stride
         self.bs = math.ceil(patch_size / (2 ** levels) )
         self.n_patches = ((img_size + 2* (patch_size - patch_stride) -patch_size) // patch_stride + 1) **2
+        self.keep_ratio = keep_ratio
 #        pos_emb = positionalencoding2d(n_df, int(self.n_patches**0.5), int(self.n_patches**0.5) ).permute(2, 0, 1).reshape([1, self.n_patches, n_df, 1, 1]).tile([batch_size, 1, 1, 1, 1])
 
         pos_emb = nn.Parameter(torch.randn( 1, self.n_patches, n_df, 1, 1 )).tile([batch_size, 1, 1, 1, 1])
@@ -124,7 +126,7 @@ class Discriminator(nn.Module):
         self.main_2 = nn.Sequential()
         for layer_ind in range(1,levels):
             self.main_2.append(
-                    discriminator_block(n_df * 2 **(layer_ind - 1), n_df * 2 ** (layer_ind))
+                    discriminator_block(n_df * 2 **(layer_ind - 1), n_df * 2 ** (layer_ind), bn = True if layer_ind < levels - 1 else False)
                     )
         self.main_2.append(
                 nn.Sequential(
@@ -147,7 +149,7 @@ class Discriminator(nn.Module):
         # index 
 #        print(self.n_patches)
 
-        rand_ind = np.random.choice(np.arange(x.shape[0]), x.shape[0]//30)
+        rand_ind = np.random.choice(np.arange(x.shape[0]), int(x.shape[0]* self.keep_ratio))
         x = x[rand_ind, :, :, :]
         pos_emb = self.pos_emb1D[rand_ind, :, :, :].to(x.device)
         x = self.main_1(x)
