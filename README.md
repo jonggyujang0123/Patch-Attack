@@ -1,51 +1,53 @@
 # Patch-Based Variational Model Inversion Attacker
 
-## Dependencies
+## Setup
 
-## Features
+1. (optional) Install anaconda
 
-## Train Classifier
-
-## Train/Download Common Generator
-
-## Execute Model Inversion Attacker
-
-
-## Features
-- (multi-node/gpu) (training/validation/test)
-- Weight and bias (Wandb) MLops
-- Easy Code Structure
-- CIFAR10/100 dataset, (*you can add your custom dataset easily)
-- Customizable configuration
-
-## Requirements and Setup
-
-### In your computer
-- Install Anaconda
-
-```
+If you don't have anaconda3, you can install by executing the below bash commands
+```bash
 wget https://repo.anaconda.com/archive/Anaconda3-2021.05-Linux-x86_64.sh
 bash ~/Desktop/<anacondafile> -b -p 
 source anaconda3/bin/activate
 ```
 
-- Create Environment 
-```
+2. Install Dependencies 
+```bash
 conda create -n torch python=3.9
 conda activate torch
 conda install pytorch==1.12.0 torchvision==0.13.0 -c pytorch
-pip install tqdm easydict wandb imageio
-cd canonicalSGD
+pip install tqdm easydict wandb imageio tqdm
 python setup.py develop
 ```
 
-### Wandb
+3. Wandb
 
 - WANDB [Enter this link](https://wandb.ai/site)
 1. create your account (you can use your Github account)
 2. in `config/*****.yaml` edit wandb setting
 3. run our script and type certification code.
 4. Done
+
+## Implementation
+
+### 1.Train Classifier
+
+- Train target classifier
+```bash
+python classifier/classify_mnist.py
+```
+
+- Train validation classifier 
+```bash
+python classifier/classify_mnist.py --random-seed=7 --ckpt-fpath="/experiments/classifier/mnist_val"
+```
+
+
+## Train/Download Common Generator
+
+## Execute Model Inversion Attacker
+
+
 
 ## Wandb implementation 
 
