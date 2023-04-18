@@ -14,13 +14,13 @@ def initialize_weights(net):
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
             m.weight.data.normal_(0, 0.02)
-#            m.bias.data.zero_()
+            m.bias.data.zero_()
         elif isinstance(m, nn.ConvTranspose2d):
             m.weight.data.normal_(0, 0.02)
-#            m.bias.data.zero_()
+            m.bias.data.zero_()
         elif isinstance(m, nn.Linear):
             m.weight.data.normal_(0, 0.02)
-#            m.bias.data.zero_()
+            m.bias.data.zero_()
 
 class Generator(nn.Module):
     def __init__(self, 
@@ -40,11 +40,11 @@ class Generator(nn.Module):
         #levels = int(math.log2(img_size)) - 2# if image size is 32, number of levels is 3 {0, 1, 2} with channel coefficients of  {1, 2, 4}
         self.label_layer = nn.Embedding(n_classes, n_classes)
         self.latent_layer = nn.Sequential(
-                nn.Linear(latent_size + n_classes + len_code, n_gf * 2**(levels) * self.init_size**2, bias=False),
-                nn.BatchNorm1d(n_gf * 2**(levels) * self.init_size**2),
+                nn.Linear(latent_size + n_classes + len_code, 1024),
+                nn.BatchNorm1d(1024),
 #                nn.LeakyReLU(0.2, inplace=True),
                 nn.ReLU(inplace=True),
-                nn.Linear(n_gf * 2**(levels) * self.init_size**2, n_gf * 2**(levels) * self.init_size**2, bias=False),
+                nn.Linear(1024, n_gf * 2**(levels) * self.init_size**2),
                 nn.BatchNorm1d(n_gf * 2**(levels) * self.init_size**2),
 #                nn.LeakyReLU(0.2, inplace=True),
                 nn.ReLU(inplace=True),
@@ -59,7 +59,7 @@ class Generator(nn.Module):
                     nn.ConvTranspose2d(
                         n_gf * 2**(levels - layer_ind ),
                         n_gf * 2 **(levels - layer_ind -1 ) if layer_ind < levels - 1 else n_c,
-                        4, 2, 1, bias=False)
+                        4, 2, 1)
                     )
             if layer_ind == levels - 1:
                 self.main.append(nn.Tanh())
@@ -187,7 +187,7 @@ class Discriminator(nn.Module):
 
         self.patch_emb = nn.Sequential(
 #                nn.Conv2d(n_c, n_df, patch_size, patch_stride, padding_size),
-                nn.utils.spectral_norm(nn.Conv2d(n_c, n_df, patch_size, patch_stride, padding_size, bias=False)),
+                nn.utils.spectral_norm(nn.Conv2d(n_c, n_df, patch_size, patch_stride, padding_size)),
 #                nn.BatchNorm2d(n_df),
 #                nn.LeakyReLU(0.2, inplace=True),
                 PositionalEncoding2D(n_df, n, n, learnable=False),
