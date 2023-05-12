@@ -1,7 +1,7 @@
 """========Default import===="""
 from __future__ import print_function
 import argparse
-from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule
+from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, save_ckpt, load_ckpt, get_data_loader
 import torch.nn as nn
 import torch
 import os
@@ -11,14 +11,9 @@ from tqdm import tqdm
 from easydict import EasyDict as edict
 import yaml
 import wandb
+os.environ['WANDB_SILENT']='true'
 """ ==========END================"""
 
-""" =========Configurable ======="""
-#from models.resnet34 import R_34_MNIST as resnet
-#from models.resnet18 import R_18_MNIST as resnet
-from models.resnet import resnet10
-os.environ['WANDB_SILENT']='true'
-""" ===========END=========== """
 
 
 
@@ -44,13 +39,13 @@ def parse_args():
             default='cosine')
     parser.add_argument("--epochs",
             type=int,
-            default=13)
+            default=20)
     parser.add_argument("--lr",
             type=float,
             default= 1e-1)
-    parser.add_argument("--random-seed",
-            type=int,
-            default = 0)
+    parser.add_argument("--valid",
+            type=bool,
+            default = False)
     parser.add_argument("--warmup-steps",
             type=int,
             default = 100)
@@ -79,7 +74,7 @@ def parse_args():
     #------------configurations
     parser.add_argument("--ckpt-fpath",
             type=str,
-            default='../experiments/classifier/mnist',
+            default='../experiments/classifier/',
             help="save path.")
     parser.add_argument("--interval-val",
             type=int,
@@ -87,79 +82,19 @@ def parse_args():
     #--------------wandb
     parser.add_argument("--wandb-project",
             type=str,
-            default='classifier_MNIST')
+            default='classifiers')
     parser.add_argument("--wandb-id",
             type=str,
             default= 'jonggyujang0123')
     parser.add_argument("--wandb-name",
             type=str,
-            default= 'ResNet18_lr')
+            default= 'classifier')
     parser.add_argument("--wandb-active",
             type=bool,
             default=False)
 
     args = parser.parse_args()
     return args
-
-def get_data_loader(args):
-    if args.dataset in ['cifar100', 'cifar10']:
-        from datasets.cifar import get_loader_cifar as get_loader
-    if args.dataset in ['mnist']:
-        from datasets.mnist import get_loader_mnist as get_loader
-    return get_loader(args)
-
-
-
-
-
-def load_ckpt(checkpoint_fpath, is_best =False):
-    """
-    Latest checkpoint loader
-        checkpoint_fpath : 
-    :return: dict
-        checkpoint{
-            model,
-            optimizer,
-            epoch,
-            scheduler}
-    example :
-    """
-    if is_best:
-        ckpt_path = checkpoint_fpath+'/'+'best.pt'
-    else:
-        ckpt_path = checkpoint_fpath+'/'+'checkpoint.pt'
-    try:
-        print(f"Loading checkpoint '{ckpt_path}'")
-        checkpoint = torch.load(ckpt_path)
-    except:
-        print(f"No checkpoint exists from '{ckpt_path}'. Skipping...")
-        print("**First time to train**")
-    return checkpoint
-
-
-def save_ckpt(checkpoint_fpath, checkpoint, is_best=False):
-    """
-    Checkpoint saver
-    :checkpoint_fpath : directory of the saved file
-    :checkpoint : checkpoiint directory
-    :return:
-    """
-    ckpt_path = checkpoint_fpath+'/'+'checkpoint.pt'
-    # Save the state
-    if not os.path.exists(checkpoint_fpath):
-        os.makedirs(checkpoint_fpath)
-    torch.save(checkpoint, ckpt_path)
-    # If it is the best copy it to another file 'model_best.pth.tar'
-#    print("Checkpoint saved successfully to '{}' at (epoch {})\n"
-#        .format(ckpt_path, checkpoint['epoch']))
-    if is_best:
-        ckpt_path_best = checkpoint_fpath+'/'+'best.pt'
-        print("This is the best model\n")
-        shutil.copyfile(ckpt_path,
-                        ckpt_path_best)
-
-
-
 
 def train(wandb, args, model):
     ## Setting 
@@ -180,7 +115,6 @@ def train(wandb, args, model):
         scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch']+1
 
-        
 
     # Prepare dataset and dataloader
     for epoch in range(start_epoch, args.epochs):
@@ -260,20 +194,25 @@ def test(args, model):
             inputs = inputs.to(args.device, non_blocking=True)
             # compute the output
             output = model(inputs).cpu().detach()
+            print(output.mean(dim=1))
             acc_batch = get_accuracy(output=output, label=labels)
             acc.update(acc_batch, n=inputs.size(0))
             #example_images.append(wandb.Image(data[0], caption="Pred: {} Truth: {}".format(pred[0].detach().item(), target[0])
         #wandb.log({"Examples":example_images})
-    result  = torch.tensor([acc.sum,acc.count]).to(cfg.device)
+#    result  = torch.tensor([acc.sum,acc.count]).to(cfg.device)
 
-    print("-"*75+ "\n")
-    print(f"| Testset accuracy is {result[0].cpu().item()/result[1].cpu().item()} = {result[0].cpu().item()}/{result[1].cpu().item()}\n")
-    print("-"*75+ "\n")
+#    print("-"*75+ "\n")
+#    print(f"| Testset accuracy is {result[0].cpu().item()/result[1].cpu().item()} = {result[0].cpu().item()}/{result[1].cpu().item()}\n")
+#    print("-"*75+ "\n")
 
 
 
 def main():
     args = parse_args()
+    if args.valid == True:
+        args.ckpt_fpath = f"{args.ckpt_fpath}/{args.dataset}_valid"
+    else:
+        args.ckpt_fpath = f"{args.ckpt_fpath}/{args.dataset}"
 
     if args.test==False and args.wandb_active:
         wandb.init(project = args.wandb_project,
@@ -288,14 +227,29 @@ def main():
         print("WARNING: You have a CUDA device, so you should probably enable CUDA")
     # Set Automatic Mixed Precision
     # We need to use seeds to make sure that model initialization same
-    set_random_seeds(random_seed = args.random_seed)
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     args.device = torch.device("cuda:0")
+    
+    if args.img_size == 32:    
+        if args.valid == True:
+            from models.resnet_32x32 import resnet50 as resnet 
+            set_random_seeds(random_seed = 7)
+        else:
+            from models.resnet_32x32 import resnet10 as resnet
+            set_random_seeds(random_seed = 0)
+    else:
+        if args.valid == True:
+            from models.resnet import resnet50 as resnet 
+            set_random_seeds(random_seed = 7)
+        else:
+            from models.resnet import resnet18 as resnet
+            set_random_seeds(random_seed = 0)
+
 
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    model = resnet10(num_classes=args.num_classes, num_channel= args.num_channel)
+    model = resnet(num_classes=args.num_classes, num_channel= args.num_channel)
     # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(args.device)
     if args.resume or args.test:

@@ -5,6 +5,48 @@ from torch.optim.lr_scheduler import LambdaLR
 import math
 import os 
 import shutil
+from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics import StructuralSimilarityIndexMeasure
+
+def noisy_labels(y, p_flip):
+    # choose labels to flip
+    flip_ix = np.random.choice(y.size(0), int(y.size(0) *  p_flip))
+    # invert the labels in place
+    y[flip_ix] = 1 - y[flip_ix]
+    return y
+
+def get_fid_score():
+    fid = FrechetInceptionDistance(feature=64)
+    # generate two slightly overlapping image intensity distributions
+    imgs_dist1 = torch.randint(0, 200, (100, 3, 299, 299), dtype=torch.uint8)
+    imgs_dist2 = torch.randint(100, 255, (100, 3, 299, 299), dtype=torch.uint8)
+    fid.update(imgs_dist1, real=True)
+    fid.update(imgs_dist2, real=False)
+    xx = fid.compute()
+    return xx
+
+
+def get_ssim():
+    preds = torch.rand([3, 3, 256, 256])
+    target = preds * 0.75
+    ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+    xx = ssim(preds, target)
+    return xx 
+
+
+
+def get_data_loader(args):
+    if args.dataset in ['cifar100', 'cifar10']:
+        from datasets.cifar import get_loader_cifar as get_loader
+    if args.dataset in ['mnist']:
+        from datasets.mnist import get_loader_mnist as get_loader
+    if args.dataset in ['emnist']:
+        from datasets.emnist import get_loader_emnist as get_loader
+    if args.dataset in ['fashion']:
+        from datasets.fashion_mnist import get_loader_fashion_mnist as get_loader
+    return get_loader(args)
+
+
 def load_ckpt(checkpoint_fpath, is_best =False):
     """
     Latest checkpoint loader

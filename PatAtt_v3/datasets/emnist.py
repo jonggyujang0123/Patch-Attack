@@ -13,9 +13,9 @@ from torchvision import datasets, transforms
 
 def get_loader_emnist(args):
     transform_train = transforms.Compose([
-                                    transforms.RandomHorizontalFlip(p=.5),
-                                    transforms.RandomVerticalFlip(p=.5),
-                                    transforms.RandomRotation(180),
+#                                    transforms.RandomHorizontalFlip(p=.5),
+#                                    transforms.RandomVerticalFlip(p=.5),
+#                                    transforms.RandomRotation(23),
 #                                    transforms.RandomAffine(degrees=(30, 70), translate=(0.1, 0.3), scale = (1.0, 1.2)),
 #                                    transforms.ColorJitter(
 #                                        brightness = (0.7, 2),
@@ -23,6 +23,8 @@ def get_loader_emnist(args):
 #                                        ),
 #                                    transforms.RandomPerspective(distortion_scale=0.6, p=1.0),
 #                                    transforms.RandomInvert(0.1),
+                                    lambda img: transforms.functional.rotate(img, -90),
+                                    lambda img: transforms.functional.hflip(img),
                                     transforms.Resize((args.img_size, args.img_size)),
 #                                    transforms.AugMix(),
                                     transforms.ToTensor(),

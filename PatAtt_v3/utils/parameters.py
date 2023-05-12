@@ -32,7 +32,7 @@ def para_config():
             default=0)
     parser.add_argument("--eval-every",
             type=int,
-            default=1)
+            default=5)
     parser.add_argument("--pin-memory",
             type=bool,
             default=True)
@@ -44,9 +44,9 @@ def para_config():
     parser.add_argument("--patch-stride",
             type=int,
             default=2)
-    parser.add_argument("--keep-ratio",
-            type=float,
-            default=0.03)
+    parser.add_argument("--patch-padding",
+            type=int,
+            default=2)
     parser.add_argument("--n-gf",
             type=int,
             default=64,
@@ -55,10 +55,6 @@ def para_config():
             type=int,
             default=192,
             help="number of discriminator feature base")
-    parser.add_argument("--n-qf",
-            type=int,
-            default=16,
-            help="number of qrator feature base")
     parser.add_argument("--level-g",
             type=int,
             default=2,
@@ -67,23 +63,13 @@ def para_config():
             type=int,
             default=4,
             help="level of Conv layer in Discrim")
-    parser.add_argument("--level-q",
-            type=int,
-            default=3,
-            help="level of Conv layer in Qrator")
     parser.add_argument("--latent-size",
             type=int,
             default=100)
-    parser.add_argument("--len-code",
-            type=int,
-            default=2)
     parser.add_argument("--w-attack",
             type=float,
             default=1.0)
-    parser.add_argument("--w-cont",
-            type=float,
-            default=1.0)
-    parser.add_argument("--attack-labelsmooth",
+    parser.add_argument("--w-mr",
             type=float,
             default=0.0)
     parser.add_argument("--gan-labelsmooth",
@@ -92,6 +78,15 @@ def para_config():
     parser.add_argument("--p-flip",
             type=float,
             default=0.0)
+    parser.add_argument("--epoch-pretrain",
+            type=int,
+            default=-1)
+    parser.add_argument("--x-sample",
+            type=int,
+            default=1)
+    parser.add_argument("--transform",
+            type=bool,
+            default=False)
 
     # dataset 
     parser.add_argument("--dataset",
@@ -106,7 +101,7 @@ def para_config():
             default=32)
     parser.add_argument("--num-workers",
             type=int,
-            default=8)
+            default=4)
     parser.add_argument("--num-channel",
             type=int,
             default=1)

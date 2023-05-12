@@ -1,8 +1,7 @@
 """Import default libraries"""
 import os
 
-import torchvision
-from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt
+from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader, noisy_labels
 from utils.parameters import para_config
 import torch.nn as nn
 import torch
@@ -12,51 +11,22 @@ import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
 from einops import rearrange
-from torchvision.transforms import Pad 
+from torchvision import transforms
 import itertools
 """import target classifier, generator, and discriminator """
-from models.resnet import resnet10
-from models.CGAN import Generator, Discriminator, Qrator
-#from models.distill import student
-#from models.miner import ReparameterizedMVN
-#from models.miner_linear import ReparameterizedMVN_Linear, ReparameterizedGMM_Linear, gaussian_logp
-#from models.CVAE_coder import CVAE
+from models.resnet_32x32 import resnet10
+from models.CGAN import Generator, Discriminator
 
-#os.environ["WANDB_SILENT"] = 'true'
-
-def get_data_loader(args):
-    if args.dataset in ['cifar100', 'cifar10']:
-        from datasets.cifar import get_loader_cifar as get_loader
-    if args.dataset in ['mnist']:
-        from datasets.mnist import get_loader_mnist as get_loader
-    if args.dataset in ['emnist']:
-        from datasets.emnist import get_loader_emnist as get_loader
-    if args.dataset in ['fashion']:
-        from datasets.fashion_mnist import get_loader_fashion_mnist as get_loader
-    return get_loader(args)
-
-
-def noisy_labels(y, p_flip):
-    # choose labels to flip
-    flip_ix = np.random.choice(y.size(0), int(y.size(0) *  p_flip))
-    # invert the labels in place
-    y[flip_ix] = 1 - y[flip_ix]
-    return y
-
-
-def train(wandb, args, classifier, classifier_val, G, D, Q):
+def train(wandb, args, classifier, classifier_val, G, D):
     fixed_z = torch.randn(
-            args.test_batch_size, 
+            args.test_batch_size*args.x_sample,
             args.latent_size,
             ).to(args.device)
-    fixed_cont = torch.FloatTensor(args.test_batch_size, args.len_code).uniform_(-1,1).to(args.device)    
 
-#    fixed_z[0,:] = 0.0
-    fixed_c = torch.arange(args.n_classes).tile(args.test_batch_size// args.n_classes).to(args.device)
+    fixed_c = torch.arange(args.n_classes).unsqueeze(1).tile([1,args.test_batch_size*args.x_sample// args.n_classes]).view(-1).to(args.device)
     BCE_loss = nn.BCELoss()
     CE_loss = nn.CrossEntropyLoss()
-    MSE_loss = nn.MSELoss()
-    optimizer_g = optim.Adam(itertools.chain(G.parameters(), Q.parameters()), lr =args.lr, betas = (args.beta_1, args.beta_2))
+    optimizer_g = optim.Adam(G.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     optimizer_d = optim.Adam(D.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     train_loader, _, _ = get_data_loader(args= args)
     if args.decay_type == "cosine":
@@ -81,6 +51,7 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
     D_x_total = AverageMeter()
     D_G_z_total = AverageMeter()
     Acc_total_t = AverageMeter()
+    Max_act = AverageMeter()
 
     pbar = tqdm(
             range(start_epoch,args.epochs),
@@ -93,7 +64,8 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
         # Switch Training Mode
         G.train()
         D.train()
-        Q.train()
+#        w_attack = np.clip( epoch / args.epochs *10, 0.0, 1.0) * args.w_attack
+        w_attack = args.w_attack
         tepoch = tqdm(train_loader,
                 disable=args.local_rank not in [-1,0],
                 bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
@@ -103,53 +75,49 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             optimizer_d.zero_grad()
             inputs = data[0].to(args.device, 
                     non_blocking=True)
-            d_logit_t = D(inputs)
-            real_target = torch.ones(d_logit_t.size(0)).to(args.device) #* 0.9 
-            real_target = noisy_labels(real_target, args.p_flip)
+            d_logit_t = D(inputs, transform = args.transform)
+            real_target = torch.ones(d_logit_t.size(0)).to(args.device)  
+#            real_target = noisy_labels(real_target, args.p_flip)
             fake_target = torch.zeros(d_logit_t.size(0)).to(args.device)
             fake_target = noisy_labels(fake_target, args.p_flip)
             err_real_d = BCE_loss(d_logit_t.view(-1),real_target - args.gan_labelsmooth)
+            D_x = d_logit_t.view(-1).detach().mean().item()
             if args.local_rank in [-1,0]:
-                D_x = d_logit_t.view(-1).detach().mean().item()
-#                D_x = D(inputs*mask).view(-1).detach().mean().item()
-#                D_x_total.update(D_x, mask.size(0))
                 D_x_total.update(D_x, d_logit_t.size(0))
-            err_real_d.backward()
-#            optimizer_d.step()
-
+            
             # (2) update discrminator (fake data)
 
-#            optimizer_d.zero_grad()
             latent_vector = torch.randn(inputs.size(0), args.latent_size).to(args.device)
-#            label.fill_(fake_label)
             c = torch.multinomial(torch.ones(args.n_classes), inputs.size(0), replacement=True).to(args.device)
-            y_cont_ = torch.FloatTensor(inputs.size(0), args.len_code).uniform_(-1, 1).to(args.device)
-            fake = G(latent_vector, c, y_cont_)
+            fake = G(latent_vector, c)
 
-            d_logit_f = D(fake.detach())
-            err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target)
-            err_fake_d.backward()
+            d_logit_f = D(fake.detach(), transform = args.transform)
+            err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target + args.gan_labelsmooth)
+            D_loss = err_real_d + err_fake_d
+
+            D_loss.backward()
+
             optimizer_d.step()
             if args.local_rank in [-1, 0]:
-                err_d = (err_fake_d + err_real_d)/2
-#                Loss_d.update(err_d.detach().mean().item(), mask.size(0))
+                err_d = (err_fake_d + err_real_d)
                 Loss_d.update(err_d.detach().mean().item(), d_logit_t.size(0))
-
             # (3) Generator update
             optimizer_g.zero_grad()
-#            label.fill_(real_label)
-#            outputs = D(fake_masked).view(-1)
-            outputs = D(fake).view(-1)
-            err_g = BCE_loss(outputs, real_target)
-            err_g.backward(retain_graph=True)
-            # (4) Qrator Loss 
+            outputs= D.forward(fake, transform = args.transform)
+            err_g = BCE_loss(outputs.view(-1) , real_target)
+
+            # (4) MI_loss Loss 
+#            optimizer_g.zero_grad()
+#            fake = G(latent_vector, c, y_cont_)
             D_disc = classifier(fake)
             loss_attack = CE_loss(D_disc, c)
-            D_cont = Q(fake)
-            cont_loss = MSE_loss(D_cont, y_cont_)
-            info_loss = args.w_attack * loss_attack + args.w_cont * cont_loss
-            info_loss.backward()
-            optimizer_g.step()
+            info_loss = (w_attack * loss_attack) #/ D.n_patches
+            mr_loss = - args.w_mr * ( D_disc.max(1)[0].mean() )
+            if epoch > args.epoch_pretrain:
+                total_loss = err_g + info_loss + mr_loss #+ mr_loss_avg
+            else:
+                total_loss = err_g
+            total_loss.backward()
             optimizer_g.step()
 
             scheduler_d.step()
@@ -160,19 +128,18 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
                 Loss_g.update(err_g.detach().item(), inputs.size(0))
                 Loss_info.update(info_loss.detach().item(), inputs.size(0))
                 D_G_z_total.update(outputs.mean().item(), inputs.size(0))
-                tepoch.set_description(f'Ep {epoch}: L_D : {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_info: {Loss_info.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}')
+                Max_act.update(D_disc.max(1)[0].mean().item(), inputs.size(0))
+                tepoch.set_description(f'Ep {epoch}: L_D : {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_info: {Loss_info.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}, Max_A: {Max_act.avg:2.1f}')
         # (5) After end of epoch, save result model
-        if epoch % args.eval_every == 0:
-            _, images = evaluate(wandb, args, classifier_val, G, fixed_z=fixed_z, fixed_c = fixed_c, fixed_cont = fixed_cont, epoch = epoch)
+        if epoch % args.eval_every == args.eval_every - 1 or epoch==0:
+            _, images = evaluate(wandb, args, classifier_val, G, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
 
             if args.local_rank in [-1,0]:
                 model_to_save_g = G.module if hasattr(G, 'module') else G
                 model_to_save_d = D.module if hasattr(D, 'module') else D
-                model_to_save_q = Q.module if hasattr(Q, 'module') else Q
                 ckpt = {
                         'model_g' : model_to_save_g.state_dict(),
                         'model_d' : model_to_save_d.state_dict(),
-                        'model_q' : model_to_save_q.state_dict(),
                         'optimizer_g' : optimizer_g.state_dict(),
                         'optimizer_d' : optimizer_d.state_dict(),
                         'scheduler_g' : scheduler_g.state_dict(),
@@ -191,9 +158,6 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
                         "image" : images,
                         },
                         step = epoch)
-#            print("-"*75+ "\n")
-#            print(f'Epoch {epoch}: Loss_D : {Loss_d.avg:2.3f}, Loss_G: {Loss_g.avg:2.3f}, lr is {scheduler_d.get_lr()[0]:.2E}, acc:{Acc_total.avg:2.3f}')
-#            print("-"*75+ "\n")
         Loss_g.reset()
         Loss_d.reset()
         Loss_info.reset()
@@ -204,32 +168,40 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             torch.distributed.barrier()
 
 
-def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, fixed_cont = None, epoch = 0):
+def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0):
     G.eval()
     if fixed_z == None:
         fixed_z = torch.randn(
-                args.test_batch_size, 
+                args.test_batch_size*args.x_sample, 
                 args.latent_size,
                 ).to(args.device)
     if fixed_c == None:
-        fixed_c = torch.multinomial(torch.ones(args.n_classes), args.test_batch_size, replacement=True).to(args.device)
-    if fixed_cont == None:
-        fixed_cont = torch.FloatTensor(args.test_batch_size, args.len_code).uniform_(-1, 1).to(args.device)
+        fixed_c = torch.multinomial(torch.ones(args.n_classes), args.test_batch_size*args.x_sample, replacement=True).to(args.device)
     val_acc = 0
     if args.local_rank in [-1,0]:
-        fake = G(fixed_z, fixed_c, fixed_cont)
+        fake = G(fixed_z, fixed_c)
         pred = classifier( fake)
         fake_y = fixed_c
 #        fake_y = args.fixed_id * \
 #                torch.ones(cfg.test_batch_size).to(cfg.device)
         val_acc = (pred.max(1)[1] == fake_y).float().mean().item()
-
+        pred_sort =  pred[range(fixed_c.shape[0]), fixed_c].reshape(args.n_classes, args.test_batch_size * args.x_sample // args.n_classes).topk(args.test_batch_size // args.n_classes, dim=-1)[1]
+        fake = fake.reshape(args.n_classes, args.test_batch_size*args.x_sample//args.n_classes, args.num_channel, args.img_size, args.img_size)[torch.arange(args.n_classes), pred_sort, :, :, :]
         image_array = rearrange(fake, 
-                '(b1 b2) c h w -> (b1 h) (b2 w) c', b2 = args.n_classes).cpu().detach().numpy().astype(np.float64)
+                'b1 b2 c h w -> (b2 h) (b1 w) c').cpu().detach().numpy().astype(np.float64)
         images = wandb.Image(image_array, caption=f'Acc is {val_acc*100:2.2f}')
-#        wandb.log({f'reconstruct':images}, step = epoch)
-
     return val_acc, images
+
+def test(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0):
+    G.eval()
+    if fixed_z == None:
+        fixed_z = torch.randn(
+                args.test_batch_size*args.x_sample, 
+                args.latent_size,
+                ).to(args.device)
+    if fixed_c == None:
+        fixed_c = torch.multinomial(torch.ones(args.n_classes), args.test_batch_size*args.x_sample, replacement=True).to(args.device)
+
 
 def main():
     args = para_config()
@@ -283,21 +255,14 @@ def main():
             n_classes = args.n_classes,
             n_gf = args.n_gf,
             n_c = args.num_channel,
-            len_code= args.len_code
             ).to(args.device)
     D = Discriminator(
             img_size = args.img_size,
             patch_size = args.patch_size,
             patch_stride= args.patch_stride,
+            patch_padding = args.patch_padding,
             n_df = args.n_df,
             n_c = args.num_channel, 
-            ).to(args.device)
-    Q = Qrator(
-            img_size = args.img_size,
-            n_qf = args.n_qf,
-            levels = args.level_q,
-            n_c = args.num_channel,
-            len_code= args.len_code
             ).to(args.device)
 #    G.weight_init()
 #    D.weight_init()
@@ -323,18 +288,17 @@ def main():
         G = torch.nn.parallel.DistributedDataParallel(G, device_ids=[args.local_rank], output_device=args.local_rank)
         classifier = torch.nn.parallel.DistributedDataParallel(classifier, device_ids=[args.local_rank], output_device=args.local_rank)
         D = torch.nn.parallel.DistributedDataParallel(D, device_ids=[args.local_rank], output_device=args.local_rank)
-        Q = torch.nn.parallel.DistributedDataParallel(Q, device_ids=[args.local_rank], output_device=args.local_rank)
     # Load common generative model
     if args.resume or args.test:
         ckpt = load_ckpt(args.ckpt_fpath, is_best = args.test)
         G.load_state_dict(ckpt['model_g'])
         D.load_state_dict(ckpt['model_d'])
-        Q.load_state_dict(ckpt['model_q'])
 
     if args.test:
-        evaluate(wandb, args,  classifier_val, G)
+#        evaluate(wandb, args,  classifier_val, G)
+        test(wandb, args,  classifier_val, G)
     else:
-        train(wandb, args, classifier, classifier_val, G, D, Q)
+        train(wandb, args, classifier, classifier_val, G, D)
     wandb.finish()
 
 

@@ -18,6 +18,7 @@ conda activate torch
 conda install pytorch==1.12.0 torchvision==0.13.0 -c pytorch
 pip install tqdm easydict wandb imageio tqdm
 python setup.py develop
+conda install -c conda-forge torchmetrics
 ```
 
 3. Wandb

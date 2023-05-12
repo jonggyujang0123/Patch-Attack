@@ -1,16 +1,60 @@
 """
 CelebA Dataloader implementation, used in DCGAN
 """
+import torch
+
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset
+
+import torchvision.utils as v_utils
+from torchvision import datasets, transforms
 import numpy as np
 
-import imageio
+def get_loader_celeba(args):
+    transform = transforms.Compose([
+        transforms.Resize(64),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
+    ])
+    dataset_train = datasets.CelebA(
+        root='../data',
+        split='train',
+        transform=transform,
+        download=True)
+    dataset_test = datasets.CelebA(
+        root='../data',
+        split='test',
+        transform=transform,
+        download=True)
+    dataset_val = datasets.CelebA(
+        root='../data',
+        split='valid',
+        transform=transform,
+        download=True)
+    train_loader = DataLoader(
+        dataset_train,
+        sampler=RandomSampler(dataset_train),
+        batch_size=args.train_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        shuffle=True)
+    test_loader = DataLoader(
+        dataset_test,
+        sampler=SequentialSampler(dataset_test),
+        batch_size=args.test_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        shuffle=False)
+    val_loader = DataLoader(
+        dataset_val,
+        sampler=SequentialSampler(dataset_val),
+        batch_size=args.test_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        shuffle=False)
+    return train_loader, val_loader, test_loader
 
-import torch
-import torchvision.transforms as v_transforms
-import torchvision.utils as v_utils
-import torchvision.datasets as v_datasets
 
-from torch.utils.data import DataLoader, TensorDataset, Dataset
 
 
 class CelebADataLoader:
