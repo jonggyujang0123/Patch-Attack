@@ -84,15 +84,18 @@ def para_config():
     parser.add_argument("--x-sample",
             type=int,
             default=1)
-    parser.add_argument("--transform",
-            type=bool,
-            default=False)
+    parser.add_argument('--transform', default=False, action=argparse.BooleanOptionalAction)
 
     # dataset 
     parser.add_argument("--dataset",
             type=str,
             default="emnist",
             help = "choose one of mnist, emnist, fashion")
+    parser.add_argument("--target-dataset",
+            type=str,
+            default="mnist",
+            help = "choose one of mnist, emnist, fashion")
+
     parser.add_argument("--n-classes",
             type=int,
             default=10)
@@ -114,10 +117,6 @@ def para_config():
     parser.add_argument("--ckpt-fpath-class",
             type=str,
             default="../experiments/classifier/mnist",
-            help="path for restoring the classifier")
-    parser.add_argument("--ckpt-fpath-class-val",
-            type=str,
-            default="../experiments/classifier/mnist_val",
             help="path for restoring the classifier")
 
     # WANDB SETTINGS

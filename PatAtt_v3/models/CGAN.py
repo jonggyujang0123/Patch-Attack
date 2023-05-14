@@ -48,11 +48,13 @@ class Generator(nn.Module):
         assert img_size in [32, 64, 128]
         self.n_classes = n_classes
         self.init_size = img_size // (2**levels) 
+        self.embed = nn.Embedding(n_classes, latent_size)
         self.main = nn.Sequential(
-                nn.Linear(latent_size + n_classes, 1024),
+                #  nn.Linear(latent_size + n_classes, 1024),
+                nn.Linear(latent_size, 1024),
                 nn.BatchNorm1d(1024),
                 nn.ReLU(inplace=True),
-#                nn.LeakyReLU(0.2, inplace=True),
+                #  nn.LeakyReLU(0.2, inplace=True),
                 nn.Linear(1024, 2 ** (levels-1) * n_gf * self.init_size**2),
                 nn.BatchNorm1d(2 ** (levels-1) * n_gf * self.init_size**2),
                 nn.ReLU(inplace=True),
@@ -76,10 +78,10 @@ class Generator(nn.Module):
         initialize_weights(self)
 
     def forward(self, x, c):
-        c = F.one_hot(c, num_classes = self.n_classes).float()
-
-        x = self.main(torch.cat([x, c], dim=1))
-        
+        #  c = F.one_hot(c, num_classes = self.n_classes).float()
+        c = self.embed(c)
+        #  x = self.main(torch.cat([x, c], dim=1))
+        x = self.main(x*c) 
         return x
 
 
@@ -106,14 +108,20 @@ class Discriminator(nn.Module):
         self.patch_emb = nn.Sequential(
 #                transform(),
                 nn.Conv2d(n_c, n_df, patch_size, patch_stride, patch_padding),
+                #  nn.BatchNorm2d(n_df),
 #                nn.Conv2d(n_c, n_df, patch_size, patch_stride, patch_padding, padding_mode='replicate'),
-                nn.LeakyReLU(0.2, inplace=True),
+#                nn.LeakyReLU(0.2, inplace=True),
+                #  nn.BatchNorm2d(n_df),
                 )
         n = self.patch_emb(torch.zeros(1, n_c, img_size, img_size)).shape[-1]
         self.n_patches = (n)**2
 #        padding_size = (n * patch_stride - (img_size - (patch_size- patch_stride)))//2
 #        self.pos_emb1D = nn.Parameter(torch.randn(1, n_df, n, n)* scale)
         self.main = nn.Sequential(
+                PositionalEncoding2D(n_df, n, n, learnable=False),
+                nn.Conv2d(2*n_df, n_df, 1, 1, 0),
+                nn.BatchNorm2d(n_df),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.Conv2d(n_df, n_df, 1, 1, 0),
                 nn.BatchNorm2d(n_df),
                 nn.LeakyReLU(0.2, inplace=True),
@@ -167,7 +175,8 @@ class PositionalEncoding2D(nn.Module):
             self.pos_emb2D = nn.Parameter(torch.zeros_like(_get_sinusoid_encoding_table(d_model, height, width)))
 
     def forward(self, x):
-#        return x + self.pos_emb2D.to(x.device)
+        #  return x + self.pos_emb2D.to(x.device)
+        #  return x * self.pos_emb2D.to(x.device)
         return torch.cat([x, self.pos_emb2D.to(x.device).tile([x.shape[0], 1, 1, 1])], dim=1)
 #        return self.dropout(x * self.pos_emb2D.to(x.device))
 

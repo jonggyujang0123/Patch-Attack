@@ -6,12 +6,10 @@ import torch.nn as nn
 import torch
 import os
 import torch.optim as optim
-import shutil
 from tqdm import tqdm
-from easydict import EasyDict as edict
-import yaml
+import numpy as np
+from einops import rearrange
 import wandb
-os.environ['WANDB_SILENT']='true'
 """ ==========END================"""
 
 
@@ -53,18 +51,9 @@ def parse_args():
     parser.add_argument("--dataset", 
             type=str,
             default = 'mnist')
-    parser.add_argument("--num-classes", 
-            type=int,
-            default = 10)
-    parser.add_argument("--img-size", 
-            type=int,
-            default = 32)
     parser.add_argument("--num-workers", 
             type=int,
             default = 8)
-    parser.add_argument("--num-channel", 
-            type=int,
-            default = 1)
     parser.add_argument("--train-batch-size", 
             type=int,
             default = 32)
@@ -91,9 +80,35 @@ def parse_args():
             default= 'classifier')
     parser.add_argument("--wandb-active",
             type=bool,
-            default=False)
+            default=True)
 
     args = parser.parse_args()
+    #-----------------set image configurations
+    args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if args.dataset in ['mnist', 'fashionmnist', 'kmnist']:
+        args.num_channel = 1
+        args.img_size = 32
+        args.num_classes = 10
+    if args.dataset == 'emnist':
+        args.num_channel = 1
+        args.img_size = 32
+        args.num_classes = 26
+    if args.dataset == 'cifar10':
+        args.num_channel = 3
+        args.img_size = 32
+        args.num_classes = 10
+    if args.dataset == 'cifar100':
+        args.num_channel = 3
+        args.img_size = 32
+        args.num_classes = 100
+    if args.dataset == 'LFW':
+        args.num_channel = 3
+        args.img_size = 64
+        args.num_classes = 10
+    if args.dataset == 'celeba':
+        args.num_channel = 3
+        args.img_size = 64
+        args.num_classes = 10177
     return args
 
 def train(wandb, args, model):
@@ -179,32 +194,23 @@ def evaluate(args, model, val_loader, device):
 
     return result[0].cpu().item()/result[1].cpu().item()
 
-def test(args, model):
-    _, _, test_loader = get_data_loader(args= args)
-    print("Loading checkpoints ... ")
-    model.eval()
-    acc = AverageMeter()
-    #example_images = []
-    correct_list = []
-    with torch.no_grad():
-        tepoch = tqdm(test_loader, 
-                     unit= " batch", 
-                     )
-        for batch, (inputs, labels) in enumerate(tepoch):
-            inputs = inputs.to(args.device, non_blocking=True)
-            # compute the output
-            output = model(inputs).cpu().detach()
-            print(output.mean(dim=1))
-            acc_batch = get_accuracy(output=output, label=labels)
-            acc.update(acc_batch, n=inputs.size(0))
-            #example_images.append(wandb.Image(data[0], caption="Pred: {} Truth: {}".format(pred[0].detach().item(), target[0])
-        #wandb.log({"Examples":example_images})
-#    result  = torch.tensor([acc.sum,acc.count]).to(cfg.device)
+def test(wandb, args):
+    train_loader, _, _ = get_data_loader(args=args, class_wise=True)
+    images = []
+    for classes in range(10):
+        loader = train_loader[classes]
+        for k, (image, idx) in enumerate(loader):
+            if k > 0:
+                continue
+            images.append(image[0:4, :, :, :])
 
-#    print("-"*75+ "\n")
-#    print(f"| Testset accuracy is {result[0].cpu().item()/result[1].cpu().item()} = {result[0].cpu().item()}/{result[1].cpu().item()}\n")
-#    print("-"*75+ "\n")
+    images = torch.cat(images, dim=0)
+    images = rearrange(images, '(b1 b2) c h w -> (b1 h) (b2 w) c', b1=10, b2=4).numpy().astype(np.float64)
+    images = wandb.Image(images)
+    wandb.log({"{args.dataset}": images})
+    
 
+    
 
 
 def main():
@@ -214,11 +220,11 @@ def main():
     else:
         args.ckpt_fpath = f"{args.ckpt_fpath}/{args.dataset}"
 
-    if args.test==False and args.wandb_active:
+    if args.wandb_active:
         wandb.init(project = args.wandb_project,
                    entity = args.wandb_id,
-                   config = dict(args),
-                   name = f'{args.wandb_name}_lr:{args.lr}',
+                   config = args,
+                   name = f'{args.dataset}',
                    group = args.dataset
                    )
     print(args)
@@ -231,15 +237,15 @@ def main():
     args.device = torch.device("cuda:0")
     
     if args.img_size == 32:    
-        if args.valid == True:
-            from models.resnet_32x32 import resnet50 as resnet 
+        if args.valid:
+            from models.resnet_32x32 import resnet50 as resnet
             set_random_seeds(random_seed = 7)
         else:
             from models.resnet_32x32 import resnet10 as resnet
             set_random_seeds(random_seed = 0)
     else:
-        if args.valid == True:
-            from models.resnet import resnet50 as resnet 
+        if args.valid:
+            from models.resnet import resnet50 as resnet
             set_random_seeds(random_seed = 7)
         else:
             from models.resnet import resnet18 as resnet
@@ -260,7 +266,7 @@ def main():
     print(f'Number of trainable parameter is {pytorch_total_params:.2E}')
 
     if args.test:
-        test(args, model)
+        test(wandb, args)
     else:
         train(wandb, args, model)
 

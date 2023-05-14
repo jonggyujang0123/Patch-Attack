@@ -1,5 +1,7 @@
 """Import default libraries"""
 import os
+from models.resnet_32x32 import resnet10
+from models.CGAN import Generator, Discriminator
 
 from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader, noisy_labels
 from utils.parameters import para_config
@@ -11,11 +13,7 @@ import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
 from einops import rearrange
-from torchvision import transforms
-import itertools
 """import target classifier, generator, and discriminator """
-from models.resnet_32x32 import resnet10
-from models.CGAN import Generator, Discriminator
 
 def train(wandb, args, classifier, classifier_val, G, D):
     fixed_z = torch.randn(
@@ -166,6 +164,7 @@ def train(wandb, args, classifier, classifier_val, G, D):
         Acc_total_t.reset()
         if args.multigpu:
             torch.distributed.barrier()
+    test(wandb, args, classifier_val, G)
 
 
 def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0):
@@ -185,22 +184,80 @@ def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0
 #        fake_y = args.fixed_id * \
 #                torch.ones(cfg.test_batch_size).to(cfg.device)
         val_acc = (pred.max(1)[1] == fake_y).float().mean().item()
-        pred_sort =  pred[range(fixed_c.shape[0]), fixed_c].reshape(args.n_classes, args.test_batch_size * args.x_sample // args.n_classes).topk(args.test_batch_size // args.n_classes, dim=-1)[1]
-        fake = fake.reshape(args.n_classes, args.test_batch_size*args.x_sample//args.n_classes, args.num_channel, args.img_size, args.img_size)[torch.arange(args.n_classes), pred_sort, :, :, :]
+        fake = fake.reshape(args.n_classes, args.test_batch_size*args.x_sample//args.n_classes, args.num_channel, args.img_size, args.img_size)
+        #  pred_sort =  pred[range(fixed_c.shape[0]), fixed_c].reshape(args.n_classes, args.test_batch_size * args.x_sample // args.n_classes).topk(args.test_batch_size // args.n_classes, dim=-1)[1]
+        #  fake = fake.reshape(args.n_classes, args.test_batch_size*args.x_sample//args.n_classes, args.num_channel, args.img_size, args.img_size)[torch.arange(args.n_classes), pred_sort, :, :, :]
         image_array = rearrange(fake, 
-                'b1 b2 c h w -> (b2 h) (b1 w) c').cpu().detach().numpy().astype(np.float64)
-        images = wandb.Image(image_array, caption=f'Acc is {val_acc*100:2.2f}')
+                'b1 b2 c h w -> (b1 h) (b2 w) c').cpu().detach().numpy().astype(np.float64)
+        images = wandb.Image(image_array, caption=f'Epoch: {epoch}, Acc: {val_acc*100:2.2f}')
     return val_acc, images
 
-def test(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0):
+def test(wandb, args, classifier_val,  G):
+    from torchmetrics.image.fid import FrechetInceptionDistance
+    from torchmetrics import StructuralSimilarityIndexMeasure
     G.eval()
-    if fixed_z == None:
-        fixed_z = torch.randn(
-                args.test_batch_size*args.x_sample, 
-                args.latent_size,
-                ).to(args.device)
-    if fixed_c == None:
-        fixed_c = torch.multinomial(torch.ones(args.n_classes), args.test_batch_size*args.x_sample, replacement=True).to(args.device)
+    Acc_val = AverageMeter() 
+    Acc_val_total = []
+    Conf_val = AverageMeter()
+    Conf_val_total = []
+    SSIM_val = AverageMeter()
+    SSIM_val_total = []
+    FID_val = AverageMeter()
+    FID_val_total = []
+    target_dataset, _, _ = get_data_loader(args, args.target_dataset, class_wise = True)
+    for class_ind, dataset  in enumerate(target_dataset):
+        pbar = tqdm(enumerate(dataset), total=len(dataset))
+        fid = FrechetInceptionDistance(feature=64, compute_on_cpu = True).to(args.device)
+        ssim = StructuralSimilarityIndexMeasure(data_range=1.0, channel = args.num_channel, compute_on_gpu=True).to(args.device)
+        for batch_idx, (x, y) in pbar:
+            fixed_z = torch.randn(
+                    y.shape[0],
+                    args.latent_size,
+                    ).to(args.device)
+            label = y.to(args.device)
+            fake = G(fixed_z, label)
+            fake = fake.detach()
+            x = x.to(args.device)
+            pred_val = classifier_val(fake)
+            pred_val = pred_val.detach()
+            x_int  = (255 * (x+1)/2).type(torch.uint8)
+            fake_int  = (255 * (fake+1)/2).type(torch.uint8)
+            if args.num_channel == 1:
+                x_int = x_int.repeat(1,3,1,1)
+                fake_int = fake_int.repeat(1,3,1,1)
+            fid.update(x_int, real = True)
+            fid.update(fake_int, real = False)
+            ssim_score =ssim( (x+1)/2, (fake+1)/2)
+            Acc_val.update((pred_val.max(1)[1] == label).float().mean().item(), x.shape[0])
+            sftm = pred_val.softmax(dim=1)
+            Conf_val.update(sftm[:, class_ind].mean().item(), x.shape[0] )
+            SSIM_val.update(ssim_score.item(), x.shape[0])
+        fid_score = fid.compute()
+        fid.reset()
+        Acc_val_total.append(Acc_val.avg) 
+        Conf_val_total.append(Conf_val.avg)
+        SSIM_val_total.append(SSIM_val.avg)
+        FID_val_total.append(fid_score.item())
+
+        print(
+            f'==> Testing model.. target class: {class_ind}\n'
+            f'    Acc: {Acc_val.avg}\n'
+            f'    Conf: {Conf_val.avg}\n'
+            f'    SSIM score (per-class) : {SSIM_val.avg}\n'
+            f'    FID score : {fid_score}\n'
+            )
+        Acc_val.reset()
+        Conf_val.reset()
+        SSIM_val.reset()
+        FID_val.reset()
+    print(
+        f'==> Overall Results\n'
+        f'    Acc: {np.mean(Acc_val_total)}\n'
+        f'    Conf: {np.mean(Conf_val_total)}\n'
+        f'    SSIM score (per-class) : {np.mean(SSIM_val_total)}\n'
+        f'    FID score : {np.mean(FID_val_total)}\n'
+        )
+
 
 
 def main():
@@ -239,12 +296,19 @@ def main():
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
+    
+    if args.img_size == 32:
+        from models.resnet_32x32 import resnet10 as resnet
+        from models.resnet_32x32 import resnet50 as resnet_val
+    else:
+        from models.resnet import resnet18 as resnet
+        from models.resnet import resnet50 as resnet_val
 
-    classifier = resnet10(
+    classifier = resnet(
             num_classes= args.n_classes,
             num_channel= args.num_channel,
             ).to(args.device)
-    classifier_val = resnet10(
+    classifier_val = resnet_val(
             num_classes= args.n_classes,
             num_channel= args.num_channel,
             ).to(args.device)
@@ -275,12 +339,13 @@ def main():
         print(f'{args.ckpt_fpath_class} model is loaded!')
     else:
         raise Exception('there is no generative checkpoint')
-
-    if os.path.exists(args.ckpt_fpath_class_val):
-        ckpt = load_ckpt(args.ckpt_fpath_class_val, is_best = True)
+    
+    fpath_val = args.ckpt_fpath_class + '_valid'
+    if os.path.exists(fpath_val):
+        ckpt = load_ckpt(fpath_val, is_best = True)
         classifier_val.load_state_dict(ckpt['model'])
         classifier_val.eval()
-        print(f'{args.ckpt_fpath_class_val} model is loaded!')
+        print(f'{fpath_val} model is loaded!')
     else:
         raise Exception('there is no generative checkpoint')
     # Load target classifier 

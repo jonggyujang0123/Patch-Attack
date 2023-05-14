@@ -27,7 +27,7 @@ def get_fid_score():
 
 
 def get_ssim():
-    preds = torch.rand([3, 3, 256, 256])
+    preds = torch.rand([1, 3, 256, 256]).tile(100,1,1,1)
     target = preds * 0.75
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
     xx = ssim(preds, target)
@@ -35,16 +35,21 @@ def get_ssim():
 
 
 
-def get_data_loader(args):
-    if args.dataset in ['cifar100', 'cifar10']:
+def get_data_loader(args, dataset_name = None, class_wise=False):
+    dataset_name = args.dataset if dataset_name is None else dataset_name
+    if dataset_name in ['cifar100', 'cifar10']:
         from datasets.cifar import get_loader_cifar as get_loader
-    if args.dataset in ['mnist']:
+    if dataset_name in ['mnist']:
         from datasets.mnist import get_loader_mnist as get_loader
-    if args.dataset in ['emnist']:
+    if dataset_name in ['emnist']:
         from datasets.emnist import get_loader_emnist as get_loader
-    if args.dataset in ['fashion']:
+    if dataset_name in ['fashion']:
         from datasets.fashion_mnist import get_loader_fashion_mnist as get_loader
-    return get_loader(args)
+    if dataset_name in ['kmnist']:
+        from datasets.kmnist import get_loader_kmnist as get_loader
+    if dataset_name == 'celeba':
+        from datasets.celebA import get_loader_celeba as get_loader
+    return get_loader(args, class_wise= class_wise)
 
 
 def load_ckpt(checkpoint_fpath, is_best =False):

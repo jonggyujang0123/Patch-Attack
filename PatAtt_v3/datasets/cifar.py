@@ -4,13 +4,13 @@ Cifar100 Dataloader implementation
 """
 import logging
 import torch
-
+import numpy as np
 from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
-
+from torch.utils.data import Subset
 logger = logging.getLogger()
 
-def get_loader_cifar(args):
+def get_loader_cifar(args, class_wise=False):
     transform_train = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
         #transforms.RandomResizedCrop((args.img_size, args.img_size), scale= (0.05, 1.0)),
@@ -26,8 +26,6 @@ def get_loader_cifar(args):
         ])
     transform_test = transform_val
 
-    if args.local_rank not in [-1,0]:
-        torch.distributed.barrier()
 
     if args.dataset == "cifar10":
         dataset_train = datasets.CIFAR10(root="../data",
@@ -64,26 +62,35 @@ def get_loader_cifar(args):
     else:
         raise Exception("Please check dataset name in args again ('cifar10' or 'cifar100'")
     
-    if args.local_rank == 0:
-        torch.distributed.barrier()
+    
 
-    train_sampler = RandomSampler(dataset_train) if args.local_rank == -1 else DistributedSampler(dataset_train)
-    val_sampler = RandomSampler(dataset_val) if args.local_rank == -1 else DistributedSampler(dataset_val)
-#    val_sampler = SequentialSampler(dataset_val)
-    test_sampler = RandomSampler(dataset_test) if args.local_rank == -1 else DistributedSampler(dataset_test)
-    train_loader = DataLoader(dataset_train,
-                              sampler=train_sampler,
-                              batch_size = args.train_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory)
-    val_loader = DataLoader(dataset_val,
-                              sampler=val_sampler,
-                              batch_size = args.train_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory) 
-    test_loader = DataLoader(dataset_test,
-                              sampler=test_sampler,
-                              batch_size = args.test_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory)
-    return train_loader, val_loader, test_loader
+    if class_wise:
+        loaders = []
+        for name, class_ind in dataset_train.class_to_idx.items():
+            if name == 'N/A':
+                continue
+            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+            loader = DataLoader(dataset_train_subset_ind,
+                                batch_size=args.test_batch_size,
+                                shuffle=True,
+                                num_workers=args.num_workers,
+                                pin_memory = args.pin_memory)
+            loaders.append(loader)
+        return loaders, 0, 0
+    else:
+        train_loader = DataLoader(dataset_train,
+                                  sampler=RandomSampler(dataset_train),
+                                  batch_size = args.train_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory)
+        val_loader = DataLoader(dataset_val,
+                                  sampler=SequentialSampler(dataset_val),
+                                  batch_size = args.train_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory) 
+        test_loader = DataLoader(dataset_test,
+                                  sampler=SequentialSampler(dataset_test),
+                                  batch_size = args.test_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory)
+        return train_loader, val_loader, test_loader

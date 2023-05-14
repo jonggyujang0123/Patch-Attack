@@ -1,10 +1,8 @@
 import os
 from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader
-from utils.parameters import para_config
 import torch.nn as nn
 import torch
 import wandb
-import os
 import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
@@ -30,11 +28,84 @@ def initialize_weights(net):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch GAN')
-    args = parser.parse_args()
     parser.add_argument('--dataset', 
-                        default='cifar10', 
+                        default='emnist', 
                         type=str)
+    parser.add_argument('--ckpt-path',
+                        default='../experiments/common_gan',
+                        type=str)
+    parser.add_argument('--seed',
+                        default=0,
+                        type=int)
+    parser.add_argument('--img-size',
+                        default=32,
+                        type=int)
+    parser.add_argument('--train-batch-size',
+                        default=128,
+                        type=int)
+    parser.add_argument('--test-batch-size',
+                        default=100,
+                        type=int)
+    parser.add_argument('--epochs',
+                        default=50,
+                        type=int)
+    parser.add_argument('--lr',
+                        default=0.0002,
+                        type=float)
+    parser.add_argument('--beta1',
+                        default=0.5,
+                        type=float)
+    parser.add_argument('--beta2',
+                        default=0.999,
+                        type=float)
+    parser.add_argument('--latent-size',
+                        default=128,
+                        type=int)
+    parser.add_argument('--n-gf',
+                        default=64,
+                        type=int)
+    parser.add_argument('--n-df',
+                        default=64,
+                        type=int)
+    parser.add_argument('--levels',
+                        default=3,
+                        type=int)
+    parser.add_argument('--n-c',
+                        default=1,
+                        type=int)
+    parser.add_argument('--decay-type',
+                        default='cosine',
+                        type=str)
+    parser.add_argument('--warmup-steps',
+                        default=100,
+                        type=int)
+    parser.add_argument('--num-workers',
+                        default=4,
+                        type=int)
+    parser.add_argument('--log-interval',
+                        default=10,
+                        type=int)
+    parser.add_argument('--pin-memory',
+                        default=True,
+                        type=bool)
+    parser.add_argument('--wandb-active',
+                        default=True,
+                        type=bool)
+    parser.add_argument('--wandb-project',
+                        default='common_gan',
+                        type=str)
+    parser.add_argument('--wandb-id',
+                        default='jonggyujang0123',
+                        type=str)
+    parser.add_argument('--local_rank',
+                        default=-1,
+                        type=int)
 
+
+    args = parser.parse_args()
+
+    args.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    args.ckpt_fpath = os.path.join(args.ckpt_path, args.dataset)
 
     return args
 
@@ -55,24 +126,27 @@ class Generator(nn.Module):
 
         self.init_size = self.img_size // 2**levels
         self.main = nn.Sequential(
-                Rearrange('b c -> b c () ()'),
-                nn.ConvTranspose2d(self.latent_size, 1024, 1, 1),
-                nn.BatchNorm2d(1024),
-                nn.ReLU(True),
-                nn.ConvTranspose2d(1024, self.n_gf * 2**levels, self.init_size, stride=1, padding=0),
-                nn.BatchNorm2d(self.n_gf * 2**levels),
-                nn.ReLU(True),
+                nn.Linear(self.latent_size, 1024),
+                nn.BatchNorm1d(1024),
+                nn.LeakyReLU(0.2, inplace=True),
+                #  nn.ReLU(True),
+                nn.Linear(1024, self.n_gf * 2**levels * self.init_size**2),
+                nn.BatchNorm1d(self.n_gf * 2**levels * self.init_size**2),
+                nn.LeakyReLU(0.2, inplace=True),
+                #  nn.ReLU(True),
+                Rearrange('b (c h w) -> b c h w', h=self.init_size, w=self.init_size),
                 )
         self.dconv = nn.Sequential()
         for i in range(levels):
             self.dconv.append(
                     nn.ConvTranspose2d(
-                        self.n_gf * 2**(levels-i), 
+                        self.n_gf * 2**(levels-i),
                         self.n_gf * 2**(levels-i-1) if i != levels-1 else self.n_c,
                         4, 2, 1))
             if i != levels-1:
                 self.dconv.append(nn.BatchNorm2d(self.n_gf * 2**(levels-i-1)))
-                self.dconv.append(nn.ReLU(True))
+                self.dconv.append(nn.LeakyReLU(0.2, inplace=True))
+                #  self.dconv.append(nn.ReLU(True))
             else:
                 self.dconv.append(nn.Tanh())
         initialize_weights(self)
@@ -104,21 +178,26 @@ class Discriminator(nn.Module):
             if i != 0:
                 self.main.append(nn.BatchNorm2d(self.n_df * 2**i))
             self.main.append(nn.LeakyReLU(0.2, inplace=True))
+            #  self.main.append(nn.Dropout2d(0.4))
         self.fc = nn.Sequential(
-                nn.Linear(self.n_df * 2**levels * (self.img_size // 2**levels)**2, 1),
+                Rearrange('b c h w -> b (c h w)'),
+                nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1024),
+                nn.BatchNorm1d(1024),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Linear(1024, 1),
                 nn.Sigmoid(),
                 )
         initialize_weights(self)
     def forward(self, x):
         x = self.main(x)
-        x = x.view(x.size(0), -1)
+        #  x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
 
 
 
 def train(wandb, args, G, D):
-    fixed_noise = torch.randn(100, args.latent_size, 1, 1).to(args.device)
+    fixed_noise = torch.randn(args.test_batch_size, args.latent_size).to(args.device)
     BCE_loss = nn.BCELoss()
     optimizer_G = optim.Adam(G.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
     optimizer_D = optim.Adam(D.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
@@ -149,22 +228,25 @@ def train(wandb, args, G, D):
             optimizer_D.zero_grad()
             real_img = data[0].to(args.device)
             b_size = real_img.size(0)
-            d_loss_real = BCE_loss(D(real_img), torch.ones(b_size).to(args.device))
+            # Train Discriminator with real image
+            output_real = D(real_img)
+            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device))
             # Train Discriminator with fake image
-            z = torch.randn(b_size, args.latent_size, 1, 1).to(args.device)
+            z = torch.randn(b_size, args.latent_size).to(args.device)
             fake_img = G(z)
-            d_loss_fake = BCE_loss(D(fake_img.detach()), torch.zeros(b_size).to(args.device))
+            output_fake = D(fake_img.detach())
+            d_loss_fake = BCE_loss(output_fake, torch.zeros(b_size,1).to(args.device))
             d_loss = d_loss_real + d_loss_fake
             d_loss.backward()
             optimizer_D.step()
             # Train Generator
             optimizer_G.zero_grad()
-            g_loss = BCE_loss(D(fake_img), torch.ones(b_size).to(args.device))
+            g_loss = BCE_loss(D(fake_img), torch.ones(b_size,1).to(args.device))
             g_loss.backward()
             optimizer_G.step()
             # Update meters
-            D_x = D(real_img).mean().item()
-            D_G_z = D(fake_img.detach()).mean().item()
+            D_x = output_real.mean().item()
+            D_G_z = output_fake.mean().item()
             Loss_g.update(g_loss.item(), b_size)
             Loss_d.update(d_loss.item(), b_size)
             D_x_total.update(D_x, b_size)
@@ -174,14 +256,21 @@ def train(wandb, args, G, D):
             scheduler_D.step()
 
             tepoch.set_description(
-                    f'Epoch [{epoch+1}/{args.epochs}]'
-                    f'Loss_g: {Loss_g.val:.4f} ({Loss_g.avg:.4f})'
-                    f'Loss_d: {Loss_d.val:.4f} ({Loss_d.avg:.4f})'
-                    f'D(x): {D_x_total.val:.4f} ({D_x_total.avg:.4f})'
-                    f'D(G(z)): {D_G_z_total.val:.4f} ({D_G_z_total.avg:.4f})'
+                    f'Epoch [{epoch+1}/{args.epochs}] '
+                    f'Loss_d: {Loss_d.val:.4f}, '
+                    f'Loss_g: {Loss_g.val:.4f}, '
+                    f'D(x): {D_x_total.val:.4f}, '
+                    f'D(G(z)): {D_G_z_total.val:.4f},'
+                    f'Lr : {scheduler_G.get_lr()[0]:.4f}'
                     )
             tepoch.refresh()
-        if args.wandb_active:
+        Loss_g.reset()
+        Loss_d.reset()
+        D_x_total.reset()
+        D_G_z_total.reset()
+
+        if epoch % args.log_interval == args.log_interval-1:
+            G.eval()
             test_img = G(fixed_noise)
             test_img = test_img.reshape(10, 10, args.n_c,args.img_size,args.img_size)
             image_grid = rearrange(test_img,
@@ -195,10 +284,11 @@ def train(wandb, args, G, D):
                 'D(G(z))': D_G_z_total.avg,
                 'image': image_grid,
                 }, step=epoch+1)
-        if epoch % args.save_every == 0:
             model_to_save_g = G.module if hasattr(G, 'module') else G
+            model_to_save_d = D.module if hasattr(D, 'module') else D
             ckpt = {
                     'model_g' : model_to_save_g.state_dict(),
+                    'model_d' : model_to_save_d.state_dict(),
                     }
             save_ckpt(checkpoint_fpath = args.ckpt_fpath, checkpoint = ckpt, is_best = True)
 
@@ -209,10 +299,12 @@ def main():
         wandb.init(project = args.wandb_project, 
                    entity = args.wandb_id,
                    config = args,
-                   name = f'{args.dataset}'
+                   name = f'{args.dataset}',
                    group = f'{args.dataset}')
-    set_seed(args.seed)
-    args.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    else:
+        os.environ["WANDB_SILENT"] = "true"
+    set_random_seeds(args.seed)
+
     
     G = Generator(
             img_size = args.img_size,
@@ -221,6 +313,7 @@ def main():
             levels = args.levels,
             n_c = args.n_c,
             ).to(args.device)
+
     D = Discriminator(
             img_size = args.img_size,
             n_df = args.n_df,
@@ -228,8 +321,6 @@ def main():
             levels = args.levels,
             ).to(args.device)
     train(wandb, args, G, D)
-
-
 
 
 if __name__ == '__main__':

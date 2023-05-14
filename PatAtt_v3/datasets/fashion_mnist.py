@@ -4,14 +4,14 @@ Mnist Data loader, as given in Mnist tutorial
 import torch
 
 from torchvision import transforms, datasets
-from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset
-
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset, Subset
+import numpy as np
 import torchvision.utils as v_utils
 from torchvision import datasets, transforms
 
 
 
-def get_loader_fashion_mnist(args):
+def get_loader_fashion_mnist(args, class_wise = False):
     transform_train = transforms.Compose([
                                     transforms.Resize((args.img_size, args.img_size)),
                                     transforms.ToTensor()])
@@ -35,27 +35,33 @@ def get_loader_fashion_mnist(args):
                                     download=True,
                                     transform=transform_test)
 
-    #dataset_train, dataset_val = torch.utils.data.random_split(dataset, [50000, 10000], generator=torch.Generator().manual_seed(1))
-    if args.local_rank == 0:
-        torch.distributed.barrier()
-
-    train_sampler = RandomSampler(dataset_train) if args.local_rank == -1 else DistributedSampler(dataset_train)
-    val_sampler = RandomSampler(dataset_val) if args.local_rank == -1 else DistributedSampler(dataset_val)
-#    val_sampler = SequentialSampler(dataset_val)
-    test_sampler = RandomSampler(dataset_test) if args.local_rank == -1 else DistributedSampler(dataset_test)
-    train_loader = DataLoader(dataset_train,
-                              sampler=train_sampler,
-                              batch_size = args.train_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory)
-    val_loader = DataLoader(dataset_val,
-                              sampler=val_sampler,
-                              batch_size = args.train_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory) 
-    test_loader = DataLoader(dataset_test,
-                              sampler=test_sampler,
-                              batch_size = args.test_batch_size,
-                              num_workers = args.num_workers,
-                              pin_memory=args.pin_memory)
-    return train_loader, val_loader, test_loader
+    if class_wise:
+        loaders = []
+        for name, class_ind in dataset_train.class_to_idx.items():
+            if name == 'N/A':
+                continue
+            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+            loader = DataLoader(dataset_train_subset_ind,
+                                batch_size=args.test_batch_size,
+                                shuffle=True,
+                                num_workers=args.num_workers,
+                                pin_memory = args.pin_memory)
+            loaders.append(loader)
+        return loaders, 0, 0
+    else:
+        train_loader = DataLoader(dataset_train,
+                                  sampler=RandomSampler(dataset_train),
+                                  batch_size = args.train_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory)
+        val_loader = DataLoader(dataset_val,
+                                  sampler=SequentialSampler(dataset_val),
+                                  batch_size = args.train_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory) 
+        test_loader = DataLoader(dataset_test,
+                                  sampler=SequentialSampler(dataset_test),
+                                  batch_size = args.test_batch_size,
+                                  num_workers = args.num_workers,
+                                  pin_memory=args.pin_memory)
+        return train_loader, val_loader, test_loader

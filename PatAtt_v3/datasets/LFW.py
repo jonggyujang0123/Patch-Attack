@@ -5,14 +5,13 @@ LFW Dataloader implementation, used in DCGAN
 import torch
 
 from torchvision import transforms, datasets
-from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset
-
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset, Subset
 import torchvision.utils as v_utils
 from torchvision import datasets, transforms
 import numpy as np
 
 
-def get_loader_lfw(args):
+def get_loader_lfw(args, class_wise=False):
     transform = transforms.Compose([
        transforms.Resize(64),
        transforms.ToTensor(),
@@ -30,22 +29,38 @@ def get_loader_lfw(args):
         transform=transform,
         download=True
         )
-    train_loader = DataLoader(
-        dataset=dataset_train,
-        sampler=RandomSampler(dataset_train),
-        batch_size=args.train_batch_size,
-        num_workers=args.num_workers,
-        shuffle=True,
-        pin_memory=True
-        )
-    test_loader = DataLoader(
-        dataset=dataset_test,
-        sampler=SequentialSampler(dataset_test),
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-        pin_memory=True
-        )
-    return train_loader, test_loader, test_loader
+    if class_wise:
+        loaders = []
+        for name, class_ind in dataset_train.class_to_idx.items():
+            if name == 'N/A':
+                continue
+            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+            loader = DataLoader(
+                dataset=dataset_train_subset_ind,
+                batch_size=args.test_batch_size,
+                num_workers=args.num_workers,
+                shuffle=False,
+                pin_memory=True
+                )
+            loaders.append(loader)
+        return loaders, 0, 0
+    else:
+        train_loader = DataLoader(
+            dataset=dataset_train,
+            sampler=RandomSampler(dataset_train),
+            batch_size=args.train_batch_size,
+            num_workers=args.num_workers,
+            shuffle=True,
+            pin_memory=True
+            )
+        test_loader = DataLoader(
+            dataset=dataset_test,
+            sampler=SequentialSampler(dataset_test),
+            batch_size=args.test_batch_size,
+            num_workers=args.num_workers,
+            shuffle=False,
+            pin_memory=True
+            )
+        return train_loader, test_loader, test_loader
 
 

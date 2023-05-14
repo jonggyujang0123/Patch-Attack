@@ -4,13 +4,13 @@ CelebA Dataloader implementation, used in DCGAN
 import torch
 
 from torchvision import transforms, datasets
-from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset
-
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler,  TensorDataset, Dataset, Subset
+import numpy as np
 import torchvision.utils as v_utils
 from torchvision import datasets, transforms
 import numpy as np
 
-def get_loader_celeba(args):
+def get_loader_celeba(args, class_wise=False):
     transform = transforms.Compose([
         transforms.Resize(64),
         transforms.ToTensor(),
@@ -19,40 +19,57 @@ def get_loader_celeba(args):
     dataset_train = datasets.CelebA(
         root='../data',
         split='train',
+        target_type='identity',
         transform=transform,
         download=True)
     dataset_test = datasets.CelebA(
         root='../data',
         split='test',
+        target_type='identity',
         transform=transform,
         download=True)
     dataset_val = datasets.CelebA(
         root='../data',
         split='valid',
+        target_type='identity',
         transform=transform,
         download=True)
-    train_loader = DataLoader(
-        dataset_train,
-        sampler=RandomSampler(dataset_train),
-        batch_size=args.train_batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        shuffle=True)
-    test_loader = DataLoader(
-        dataset_test,
-        sampler=SequentialSampler(dataset_test),
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        shuffle=False)
-    val_loader = DataLoader(
-        dataset_val,
-        sampler=SequentialSampler(dataset_val),
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        shuffle=False)
-    return train_loader, val_loader, test_loader
+    if class_wise:
+        loaders = []
+        for name, class_ind in dataset_train.class_to_idx.items():
+            if name == 'N/A':
+                continue
+            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+            loader = DataLoader(dataset_train_subset_ind,
+                                batch_size=args.test_batch_size,
+                                shuffle=True,
+                                num_workers=args.num_workers,
+                                pin_memory = args.pin_memory)
+            loaders.append(loader)
+        return loaders, 0, 0
+    else:
+        train_loader = DataLoader(
+            dataset_train,
+            sampler=RandomSampler(dataset_train),
+            batch_size=args.train_batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            shuffle=True)
+        test_loader = DataLoader(
+            dataset_test,
+            sampler=SequentialSampler(dataset_test),
+            batch_size=args.test_batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            shuffle=False)
+        val_loader = DataLoader(
+            dataset_val,
+            sampler=SequentialSampler(dataset_val),
+            batch_size=args.test_batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            shuffle=False)
+        return train_loader, val_loader, test_loader
 
 
 
