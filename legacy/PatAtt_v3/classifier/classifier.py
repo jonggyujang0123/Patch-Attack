@@ -1,7 +1,7 @@
 """========Default import===="""
 from __future__ import print_function
 import argparse
-from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, save_ckpt, load_ckpt, get_data_loader
+from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, save_ckpt, load_ckpt, get_data_loader, accuracy
 import torch.nn as nn
 import torch
 import os
@@ -10,6 +10,7 @@ from tqdm import tqdm
 import numpy as np
 from einops import rearrange
 import wandb
+import torch.nn.functional as F 
 """ ==========END================"""
 
 
@@ -56,10 +57,10 @@ def parse_args():
             default = 8)
     parser.add_argument("--train-batch-size", 
             type=int,
-            default = 32)
+            default = 256)
     parser.add_argument("--test-batch-size", 
             type=int,
-            default = 32)
+            default = 256)
     #------------configurations
     parser.add_argument("--ckpt-fpath",
             type=str,
@@ -108,7 +109,7 @@ def parse_args():
     if args.dataset == 'celeba':
         args.num_channel = 3
         args.img_size = 64
-        args.num_classes = 10177
+        args.num_classes = 1000
     return args
 
 def train(wandb, args, model):
@@ -151,7 +152,7 @@ def train(wandb, args, model):
 
         # save and evaluate model routinely.
         if epoch % args.interval_val == 0:
-            val_acc = evaluate(args, model=model, device=args.device, val_loader=test_loader)
+            val_acc, top5_acc = evaluate(args, model=model, device=args.device, val_loader=test_loader)
             ckpt = {
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
@@ -165,10 +166,11 @@ def train(wandb, args, model):
             if args.wandb_active:
                 wandb.log({
                     "loss": AvgLoss.val,
-                    "val_acc" : val_acc
+                    "top1" : val_acc,
+                    "top5" : top5_acc,
                     })
             print("-"*75+ "\n")
-            print(f"| {epoch}-th epoch, training loss is {AvgLoss.avg}, and Val Accuracy is {val_acc*100:2.2f}%\n")
+            print(f"| {epoch}-th epoch, training loss is {AvgLoss.avg}, and Val Accuracy is {val_acc*100:2.2f}, top5 accuracy is {top5_acc*100:2.2f}\n")
             print("-"*75+ "\n")
         AvgLoss.reset()
         tepoch.close()
@@ -176,7 +178,8 @@ def train(wandb, args, model):
 
 def evaluate(args, model, val_loader, device):
     model.eval()
-    acc = AverageMeter()
+    acc_t1 = AverageMeter()
+    acc_t5 = AverageMeter()
     valepoch = tqdm(val_loader, 
                   unit= " batch")
     with torch.no_grad():
@@ -186,18 +189,22 @@ def evaluate(args, model, val_loader, device):
             output = model(inputs).detach().cpu()
 
             # Measure accuracy
-            acc_batch = get_accuracy(output=output, label=labels)
-            acc.update(acc_batch, n=inputs.size(0))
-            valepoch.set_description(f'Validation Acc: {acc.avg:2.2f}')
+            top1, top5 = accuracy(output, labels, topk=(1, 5))
+            acc_t1.update(top1.item(), n=inputs.size(0))
+            acc_t5.update(top5.item(), n=inputs.size(0))
+            valepoch.set_description(f'Validation Acc: {acc_t1.avg:2.4f} | {acc_t5.avg:2.4f}')
+            #  acc.update(acc_batch, n=inputs.size(0))
+            #  valepoch.set_description(f'Validation Acc: {acc.avg:2.2f}')
     valepoch.close()
-    result  = torch.tensor([acc.sum,acc.count]).to(device)
+    #  result  = torch.tensor([acc.sum,acc.count]).to(device)
 
-    return result[0].cpu().item()/result[1].cpu().item()
+    return acc_t1.avg, acc_t5.avg
 
 def test(wandb, args):
     train_loader, _, _ = get_data_loader(args=args, class_wise=True)
     images = []
     for classes in range(10):
+        print(f'{classes}th class')
         loader = train_loader[classes]
         for k, (image, idx) in enumerate(loader):
             if k > 0:
@@ -205,7 +212,8 @@ def test(wandb, args):
             images.append(image[0:4, :, :, :])
 
     images = torch.cat(images, dim=0)
-    images = rearrange(images, '(b1 b2) c h w -> (b1 h) (b2 w) c', b1=10, b2=4).numpy().astype(np.float64)
+    images = F.pad(images, pad = (1, 1, 1, 1), value=-1)
+    images = rearrange(images, '(b1 b2) c h w -> (b2 h) (b1 w) c', b1=10, b2=4).numpy().astype(np.float64)
     images = wandb.Image(images)
     wandb.log({"{args.dataset}": images})
     
@@ -248,17 +256,17 @@ def main():
             from models.resnet import resnet50 as resnet
             set_random_seeds(random_seed = 7)
         else:
-            from models.resnet import resnet18 as resnet
+            from models.resnet import resnet34 as resnet
             set_random_seeds(random_seed = 0)
 
 
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    model = resnet(num_classes=args.num_classes, num_channel= args.num_channel)
+    model = resnet(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True if args.img_size == 64 and args.valid else False)
     # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(args.device)
-    if args.resume or args.test:
+    if args.resume :
         ckpt = load_ckpt(args.ckpt_fpath, is_best = args.test)
         model.load_state_dict(ckpt['model'])
 

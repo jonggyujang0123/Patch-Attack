@@ -9,9 +9,63 @@ import numpy as np
 import torchvision.utils as v_utils
 from torchvision import datasets, transforms
 import numpy as np
+import torch.nn.functional as F
+#  import albumentations as A
+#  from albumentations.pytorch import ToTensorV2
+
+class Cutout(object):
+    """Randomly mask out one or more patches from an image.
+
+    Args:
+        n_holes (int): Number of patches to cut out of each image.
+        length (int): The length (in pixels) of each square patch.
+    """
+    def __init__(self, n_holes, length):
+        self.n_holes = n_holes
+        self.length = length
+
+    def __call__(self, img):
+        """
+        Args:
+            img (Tensor): Tensor image of size (C, H, W).
+        Returns:
+            Tensor: Image with n_holes of dimension length x length cut out of it.
+        """
+        self.n_holes = np.random.randint(0, 4)
+        self.length = np.random.randint(6, 16)
+        h = img.size(1)
+        w = img.size(2)
+
+        mask = np.ones((h, w), np.float32)
+
+        for n in range(self.n_holes):
+            y = np.random.randint(h)
+            x = np.random.randint(w)
+
+            y1 = np.clip(y - self.length // 2, 0, h)
+            y2 = np.clip(y + self.length // 2, 0, h)
+            x1 = np.clip(x - self.length // 2, 0, w)
+            x2 = np.clip(x + self.length // 2, 0, w)
+
+            mask[y1: y2, x1: x2] = 0.
+
+        mask = torch.from_numpy(mask)
+        mask = mask.expand_as(img)
+        img = img * mask
+
+        return img
 
 def get_loader_celeba(args, class_wise=False):
     transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.CenterCrop(128),
+        transforms.Resize(64),
+        transforms.ToTensor(),
+        Cutout(n_holes=3, length=16),
+        transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
+    ])
+    transform_test = transforms.Compose([
+        transforms.CenterCrop(128),
         transforms.Resize(64),
         transforms.ToTensor(),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
@@ -24,22 +78,44 @@ def get_loader_celeba(args, class_wise=False):
         download=True)
     dataset_test = datasets.CelebA(
         root='../data',
-        split='test',
+        split='train',
         target_type='identity',
-        transform=transform,
+        transform=transform_test,
         download=True)
-    dataset_val = datasets.CelebA(
-        root='../data',
-        split='valid',
-        target_type='identity',
-        transform=transform,
-        download=True)
+    #  dataset_test = datasets.CelebA(
+    #      root='../data',
+    #      split='test',
+    #      target_type='identity',
+    #      transform=transform,
+    #      download=True)
+    #  dataset_val = datasets.CelebA(
+    #      root='../data',
+    #      split='valid',
+    #      target_type='identity',
+    #      transform=transform,
+    #      download=True)
+    dataset_train.identity = dataset_train.identity - 1
+    dataset_test.identity = dataset_test.identity - 1
+    #  dataset_val.identity = dataset_val.identity - 1
+
+    train_targets = F.one_hot(dataset_train.identity, num_classes= 10177)
+    indices = torch.argsort(train_targets.sum(1).sum(0), descending=True).view(-1)
+    train_targets = train_targets[:, :, indices]
+    dataset_train.identity = train_targets.sum(dim=1).argmax(dim=1).unsqueeze(1)
+    
+    test_targets = F.one_hot(dataset_test.identity, num_classes= 10177)
+    test_targets = test_targets[:, :, indices]
+    dataset_test.identity = test_targets.sum(dim=1).argmax(dim=1).unsqueeze(1)
+    #
+    #  val_targets = F.one_hot(dataset_val.identity, num_classes= 10177)
+    #  val_targets = val_targets[:, :, indices]
+    #  dataset_val.identity = val_targets.sum(dim=1).argmax(dim=1).unsqueeze(1)
+
+
     if class_wise:
         loaders = []
-        for name, class_ind in dataset_train.class_to_idx.items():
-            if name == 'N/A':
-                continue
-            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+        for class_ind in range(1000):
+            dataset_train_subset_ind = Subset(dataset_test, np.where(dataset_test.identity[:,0] == class_ind)[0])
             loader = DataLoader(dataset_train_subset_ind,
                                 batch_size=args.test_batch_size,
                                 shuffle=True,
@@ -48,28 +124,31 @@ def get_loader_celeba(args, class_wise=False):
             loaders.append(loader)
         return loaders, 0, 0
     else:
+        n_total = len(dataset_train)
+        n_target = int(n_total * 0.8)
+        #  n_val = n_total - n_target
+        mask = torch.zeros(n_total).bool()
+        mask_ind = torch.randperm(n_total)[:n_target]
+        mask[mask_ind] = True
+        dataset_train = Subset(dataset_train, 
+                               np.where(mask * (dataset_train.identity[:,0] < 1000))[0])
+        dataset_test = Subset(dataset_test,
+                              np.where( (~mask) * (dataset_test.identity[:,0] < 1000))[0])
         train_loader = DataLoader(
             dataset_train,
-            sampler=RandomSampler(dataset_train),
+            #  sampler=RandomSampler(dataset_train),
             batch_size=args.train_batch_size,
             num_workers=args.num_workers,
             pin_memory=True,
             shuffle=True)
         test_loader = DataLoader(
             dataset_test,
-            sampler=SequentialSampler(dataset_test),
+            #  sampler=SequentialSampler(dataset_test),
             batch_size=args.test_batch_size,
             num_workers=args.num_workers,
             pin_memory=True,
             shuffle=False)
-        val_loader = DataLoader(
-            dataset_val,
-            sampler=SequentialSampler(dataset_val),
-            batch_size=args.test_batch_size,
-            num_workers=args.num_workers,
-            pin_memory=True,
-            shuffle=False)
-        return train_loader, val_loader, test_loader
+        return train_loader, test_loader, test_loader
 
 
 

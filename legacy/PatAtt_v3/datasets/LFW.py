@@ -11,11 +11,13 @@ from torchvision import datasets, transforms
 import numpy as np
 
 
-def get_loader_lfw(args, class_wise=False):
+def get_loader_LFW(args, class_wise=False):
     transform = transforms.Compose([
-       transforms.Resize(64),
-       transforms.ToTensor(),
-       transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
+        transforms.RandomHorizontalFlip(),
+        transforms.CenterCrop(160),
+        transforms.Resize(64),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
     ])
     dataset_train = datasets.LFWPeople(
         root='../data',
@@ -30,11 +32,13 @@ def get_loader_lfw(args, class_wise=False):
         download=True
         )
     if class_wise:
+        dataset_train.targets_np = np.array(dataset_train.targets)
         loaders = []
-        for name, class_ind in dataset_train.class_to_idx.items():
+        for name, class_ind in enumerate([291, 304, 321, 370, 373, 380, 385, 417, 531, 538]):
+            print(class_ind)
             if name == 'N/A':
                 continue
-            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets == class_ind)[0])
+            dataset_train_subset_ind = Subset(dataset_train, np.where(dataset_train.targets_np == class_ind)[0])
             loader = DataLoader(
                 dataset=dataset_train_subset_ind,
                 batch_size=args.test_batch_size,
@@ -47,7 +51,7 @@ def get_loader_lfw(args, class_wise=False):
     else:
         train_loader = DataLoader(
             dataset=dataset_train,
-            sampler=RandomSampler(dataset_train),
+            #  sampler=RandomSampler(dataset_train),
             batch_size=args.train_batch_size,
             num_workers=args.num_workers,
             shuffle=True,
@@ -55,7 +59,7 @@ def get_loader_lfw(args, class_wise=False):
             )
         test_loader = DataLoader(
             dataset=dataset_test,
-            sampler=SequentialSampler(dataset_test),
+            #  sampler=SequentialSampler(dataset_test),
             batch_size=args.test_batch_size,
             num_workers=args.num_workers,
             shuffle=False,

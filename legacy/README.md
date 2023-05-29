@@ -21,6 +21,23 @@ python setup.py develop
 <!-- conda install -c conda-forge torchmetrics -->
 ```
 
+3. Download datasets 
+- Download Celeba dataset if original download linke is not available. (assume you are in this repo not `Pat_att_v3`)
+```
+mkdir data/celeba
+cd data/celeba
+wget --load-cookies ~/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies ~/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX" -O celeba.zip && rm -rf ~/cookies.txt
+unzip celeba.zip
+```
+
+- Download HanDB dataset (preprocessed by hslyu)
+```bash
+cd data
+git clone https://github.com/hslyu/HAN.git
+
+
+```
+
 ## Implementation
 
 ### 1. Experiment 1: Attack *EMNIST* dataset using *MNIST* auxiliary dataset
@@ -44,7 +61,7 @@ a``bash
 python otherMIAs/general_MI.py --target-dataset=emnist --epochs=50 --lr=3e-3 # General MI
 python otherMIAs/generative_MI.py --levels=2 --target-dataset=emnist --aux-dataset=mnist --epochs=400 --lr=3e-2 --random-seed={x} # GenerativeMI
 python otherMIAs/VMI.py --lr=2e-4 # Variational MI
-python tools/main.py --epochs=200 --target-dataset=emnist --aux-dataset=HAN --train-batch-size=256 --patch-size=8 --patch-stride=4 --patch-padding=4 --n-gf=64 --level-g=2 --latent-size=64 --n-df=192 --lr=3e-3 --w-mr=3e-2 --w-attack=100.0 --latent-size=64 --target-class=1 --gan-labelsmooth=0.0
+python tools/main.py --epochs=200 --train-batch-size=256 --patch-size=6 --patch-stride=2 --keep-ratio=0.6 --n-gf=64 --n-df=16 --level-g=4 --level-d=3 --w-attack=0.01 --lr=3e-3
 ```
 
 ### 2. Experiment 2: Attack *KMNIST* dataset using *MNIST* auxiliary dataset
@@ -70,13 +87,6 @@ python otherMIAs/general_MI.py --target-dataset=kmnist --epochs=50 --lr=3e-3  # 
 
 
 ### 3. Experiment 3: Attack *CelebA* dataset using *LFW* dataset
-- Download Celeba dataset if original download linke is not available. (assume you are in this repo not `Pat_att_v3`)
-```
-mkdir data/celeba
-cd data/celeba
-wget --load-cookies ~/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies ~/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX" -O celeba.zip && rm -rf ~/cookies.txt
-unzip celeba.zip
-```
 
 1. Train target/validation classifier
 ```bash

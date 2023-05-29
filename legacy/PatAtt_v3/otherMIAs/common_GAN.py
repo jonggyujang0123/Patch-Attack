@@ -37,11 +37,8 @@ def parse_args():
     parser.add_argument('--seed',
                         default=0,
                         type=int)
-    parser.add_argument('--img-size',
-                        default=32,
-                        type=int)
     parser.add_argument('--train-batch-size',
-                        default=128,
+                        default=64,
                         type=int)
     parser.add_argument('--test-batch-size',
                         default=100,
@@ -69,9 +66,6 @@ def parse_args():
                         type=int)
     parser.add_argument('--levels',
                         default=3,
-                        type=int)
-    parser.add_argument('--n-c',
-                        default=1,
                         type=int)
     parser.add_argument('--decay-type',
                         default='cosine',
@@ -104,8 +98,35 @@ def parse_args():
 
     args = parser.parse_args()
 
+
     args.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     args.ckpt_fpath = os.path.join(args.ckpt_path, args.dataset)
+
+    if args.dataset in ['mnist', 'fashionmnist', 'kmnist']:
+        args.num_channel = 1
+        args.img_size = 32
+        args.num_classes = 10
+    if args.dataset == 'emnist':
+        args.num_channel = 1
+        args.img_size = 32
+        args.num_classes = 26
+    if args.dataset == 'cifar10':
+        args.num_channel = 3
+        args.img_size = 32
+        args.num_classes = 10
+    if args.dataset == 'cifar100':
+        args.num_channel = 3
+        args.img_size = 32
+        args.num_classes = 100
+    if args.dataset == 'LFW':
+        args.num_channel = 3
+        args.img_size = 64
+        args.num_classes = 10
+    if args.dataset == 'celeba':
+        args.num_channel = 3
+        args.img_size = 64
+        args.num_classes = 1000
+
 
     return args
 
@@ -126,16 +147,21 @@ class Generator(nn.Module):
 
         self.init_size = self.img_size // 2**levels
         self.main = nn.Sequential(
-                nn.Linear(self.latent_size, 1024),
-                nn.BatchNorm1d(1024),
-                nn.LeakyReLU(0.2, inplace=True),
-                #  nn.ReLU(True),
-                nn.Linear(1024, self.n_gf * 2**levels * self.init_size**2),
-                nn.BatchNorm1d(self.n_gf * 2**levels * self.init_size**2),
-                nn.LeakyReLU(0.2, inplace=True),
-                #  nn.ReLU(True),
-                Rearrange('b (c h w) -> b c h w', h=self.init_size, w=self.init_size),
+                Rearrange('b c -> b c () ()'),
+                nn.ConvTranspose2d(self.latent_size, self.n_gf * 2**levels, self.init_size, 1, 0),
+                nn.BatchNorm2d(self.n_gf * 2**levels),
+                nn.ReLU(True),
                 )
+                #  nn.Linear(self.latent_size, 1024),
+                #  nn.BatchNorm1d(1024),
+                #  nn.LeakyReLU(0.2, inplace=True),
+                #  #  nn.ReLU(True),
+                #  nn.Linear(1024, self.n_gf * 2**levels * self.init_size**2),
+                #  nn.BatchNorm1d(self.n_gf * 2**levels * self.init_size**2),
+                #  nn.LeakyReLU(0.2, inplace=True),
+                #  #  nn.ReLU(True),
+                #  Rearrange('b (c h w) -> b c h w', h=self.init_size, w=self.init_size),
+                #  )
         self.dconv = nn.Sequential()
         for i in range(levels):
             self.dconv.append(
@@ -145,8 +171,8 @@ class Generator(nn.Module):
                         4, 2, 1))
             if i != levels-1:
                 self.dconv.append(nn.BatchNorm2d(self.n_gf * 2**(levels-i-1)))
-                self.dconv.append(nn.LeakyReLU(0.2, inplace=True))
-                #  self.dconv.append(nn.ReLU(True))
+                #  self.dconv.append(nn.LeakyReLU(0.2, inplace=True))
+                self.dconv.append(nn.ReLU(True))
             else:
                 self.dconv.append(nn.Tanh())
         initialize_weights(self)
@@ -178,14 +204,17 @@ class Discriminator(nn.Module):
             if i != 0:
                 self.main.append(nn.BatchNorm2d(self.n_df * 2**i))
             self.main.append(nn.LeakyReLU(0.2, inplace=True))
-            #  self.main.append(nn.Dropout2d(0.4))
+            #  self.main.append(nn.Dropout2d(0.2))
         self.fc = nn.Sequential(
+                nn.Conv2d(self.n_df * 2**(levels-1), 1, self.img_size // 2**levels, 1, 0),
                 Rearrange('b c h w -> b (c h w)'),
-                nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1024),
-                nn.BatchNorm1d(1024),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Linear(1024, 1),
+                #  nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1),
                 nn.Sigmoid(),
+                #  nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1024),
+                #  nn.BatchNorm1d(1024),
+                #  nn.LeakyReLU(0.2, inplace=True),
+                #  nn.Linear(1024, 1),
+                #  nn.Sigmoid(),
                 )
         initialize_weights(self)
     def forward(self, x):
@@ -230,7 +259,7 @@ def train(wandb, args, G, D):
             b_size = real_img.size(0)
             # Train Discriminator with real image
             output_real = D(real_img)
-            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device))
+            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device)-0.1)
             # Train Discriminator with fake image
             z = torch.randn(b_size, args.latent_size).to(args.device)
             fake_img = G(z)
@@ -272,7 +301,7 @@ def train(wandb, args, G, D):
         if epoch % args.log_interval == args.log_interval-1:
             G.eval()
             test_img = G(fixed_noise)
-            test_img = test_img.reshape(10, 10, args.n_c,args.img_size,args.img_size)
+            test_img = test_img.reshape(10, 10, args.num_channel,args.img_size,args.img_size)
             image_grid = rearrange(test_img,
                                    'b1 b2 c h w -> (b1 h) (b2 w) c').cpu().detach().numpy().astype(np.float64)
             image_grid = wandb.Image(image_grid, caption=f'Epoch {epoch+1}')
@@ -311,13 +340,13 @@ def main():
             latent_size = args.latent_size,
             n_gf = args.n_gf,
             levels = args.levels,
-            n_c = args.n_c,
+            n_c = args.num_channel,
             ).to(args.device)
 
     D = Discriminator(
             img_size = args.img_size,
             n_df = args.n_df,
-            n_c = args.n_c,
+            n_c = args.num_channel,
             levels = args.levels,
             ).to(args.device)
     train(wandb, args, G, D)
