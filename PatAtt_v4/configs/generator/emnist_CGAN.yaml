@@ -1,0 +1,41 @@
+# ------ Default 
+weight_decay: 5.0e-4
+decay_type: "linear"
+epochs: 300
+lr : 3.0e-4
+seed : 0
+beta_1 : 0.5
+beta_2 : 0.999
+train_batch_size: 256
+test_batch_size: 64
+patch_size : 4
+patch_margin : 2 
+latent_size : 3
+n_df : 16
+n_gf : 16
+warmup_steps : 100
+random_seed : 0
+eval_every : 10
+# ------ Dataset
+dataset: 'emnist'
+dataset_2:
+  first : 'mnist'
+  second : 'emnist'
+  third : 'fashion' 
+pin_memory : True
+num_classes : 10
+img_size : 32
+num_workers : 8
+grayscale : True
+# Validation Setting"""
+interval_val : 1 
+
+# Save Path"""
+ckpt_fpath : '../experiments/generator/emnist_cgan'
+
+# WANDB SETTINGS"""
+wandb:
+  project : 'generator_EMNIST_CGAN'
+  id : 'jonggyujang0123'
+  name : 'ResNet50_lr'
+  active : True
