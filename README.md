@@ -7,7 +7,7 @@
 If you don't have anaconda3, you can install by executing the below bash commands
 ```bash
 wget https://repo.anaconda.com/archive/Anaconda3-2021.05-Linux-x86_64.sh
-bash ~/Desktop/<anacondafile> -b -p 
+bash <path/to/Anaconda3-2021.05-Linux-x86_64.sh> -b -p 
 source anaconda3/bin/activate
 ```
 
