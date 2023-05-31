@@ -7,7 +7,7 @@
 If you don't have anaconda3, you can install by executing the below bash commands
 ```bash
 wget https://repo.anaconda.com/archive/Anaconda3-2021.05-Linux-x86_64.sh
-bash ~/Desktop/<anacondafile> -b -p 
+bash <path/to/Anaconda3-2021.05-Linux-x86_64.sh> -b -p 
 source anaconda3/bin/activate
 ```
 
@@ -40,7 +40,7 @@ python otherMIAs/common_GAN.py --levels=2 --latent-size=64 --dataset=mnist --tra
 
 3. Run MIAs
 
-a``bash
+```bash
 python otherMIAs/general_MI.py --target-dataset=emnist --epochs=50 --lr=3e-3 # General MI
 python otherMIAs/generative_MI.py --levels=2 --target-dataset=emnist --aux-dataset=mnist --epochs=400 --lr=3e-2 --random-seed={x} # GenerativeMI
 python otherMIAs/VMI.py --lr=2e-4 # Variational MI
