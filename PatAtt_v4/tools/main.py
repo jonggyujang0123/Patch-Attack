@@ -167,16 +167,45 @@ def para_config():
         args.num_classes = 1000
     return args
 
+class TRANS_classifier(nn.Module):
+    def __init__(
+            self,
+            classifier,
+            args
+            ):
+        super(TRANS_classifier, self).__init__() 
+        self.crop = nn.Sequential(
+                transforms.RandomRotation(5, fill=-1),
+                transforms.FiveCrop(26),
+                )
+        self.classifier = classifier
+        self.pad = nn.Sequential(
+                transforms.Resize((30, 30)),
+                #  transforms.Resize((args.img_size, args.img_size)),
+                transforms.Pad(1, fill=-1),
+                #  transforms.Resize((args.img_size, args.img_size)),
+                )
+        self.cutout = Cutout()
+        print(self.crop)
+        print(self.pad)
+    def forward(self, x):
+        b, c, h, w = x.size()
+        if np.random.rand() < 0.6:
+            x = torch.cat(self.crop(x))
+            x = self.pad(x)
+            x = self.cutout(x)
+            x = self.classifier(x)
+            x = x.view(b, 5, -1)
+            x = x.mean(dim=1)
+        else:
+            x = self.classifier(x)
+        return x
+
 def train(wandb, args, classifier, classifier_val, G, D):
-    trans = nn.Sequential(
-            transforms.RandomRotation(5, fill=-1),
-            #  transforms.FiveCrop(32),
-            transforms.RandomCrop(26),
-            transforms.Resize((30,30)),
-            transforms.Pad(1, fill=-1),
-            #  transforms.Resize((args.img_size, args.img_size)),
-            #  Cutout(),
-            )
+    trans_cls = TRANS_classifier(
+            classifier=classifier,
+            args=args,
+            ).to(args.device)
 
     cut_out = Cutout()
     fixed_z = torch.randn(
@@ -242,8 +271,8 @@ def train(wandb, args, classifier, classifier_val, G, D):
             c = torch.LongTensor(x_real.size(0)).fill_(args.target_class).to(args.device)
             x_fake = G(latent_vector)
             d_logit_f = D(x_fake.detach(), transform = args.transform)
-            err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target + args.gan_labelsmooth)
-            #  err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target)
+            #  err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target + args.gan_labelsmooth)
+            err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target)
             D_loss = err_real_d + err_fake_d
 
             D_loss.backward()
@@ -258,10 +287,8 @@ def train(wandb, args, classifier, classifier_val, G, D):
 
             # (4) MI_loss Loss 
             #  x_fake = trans(x_fake)
-            if np.random.rand() < 0.5:
-                D_disc = classifier(x_fake)
-            else:
-                D_disc = classifier(trans(x_fake))
+            #  D_disc = classifier(trans(x_fake))
+            D_disc = trans_cls(x_fake)
             loss_attack = CE_loss(D_disc, c)
             info_loss = (w_attack * loss_attack) #/ D.n_patches
             mr_loss = args.w_mr * ( - D_disc[:,args.target_class].mean() )
@@ -288,7 +315,7 @@ def train(wandb, args, classifier, classifier_val, G, D):
             tepoch.set_description(f'Ep {epoch}: L_D : {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_info: {Loss_info.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}, Max_A: {Max_act.avg:2.1f}')
         # (5) After end of epoch, save result model
         if epoch % args.eval_every == args.eval_every - 1 or epoch==0:
-            _, images = evaluate(wandb, args, classifier, G, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
+            _, images = evaluate(wandb, args, trans_cls, G, D, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
             model_to_save_g = G.module if hasattr(G, 'module') else G
             model_to_save_d = D.module if hasattr(D, 'module') else D
             ckpt = {
@@ -316,7 +343,7 @@ def train(wandb, args, classifier, classifier_val, G, D):
     #  test(wandb, args, classifier_val, G)
 
 
-def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0):
+def evaluate(wandb, args, classifier, G, D, fixed_z=None, fixed_c = None, epoch = 0):
     G.eval()
     if fixed_z == None:
         fixed_z = torch.randn(
@@ -332,8 +359,8 @@ def evaluate(wandb, args, classifier, G, fixed_z=None, fixed_c = None, epoch = 0
     pred = classifier( x_fake)
     fake_y = fixed_c
     val_acc = (pred.max(1)[1] == fake_y).float().mean().item()
-    #  arg_sort = pred[:, fixed_c[0]].argsort(descending=True)
-    #  x_fake = x_fake[arg_sort, ...]
+    arg_sort = (torch.log(D(x_fake)[:,0] + 1e-8) + args.w_attack*torch.log(pred.softmax(dim=1)[:, fixed_c[0]])).argsort(descending=True)
+    x_fake = x_fake[arg_sort, ...]
     x_fake = x_fake.reshape(
             args.test_batch_size//10,
             10,

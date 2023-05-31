@@ -19,7 +19,7 @@ class Cutout(nn.Module):
         length (int): The length (in pixels) of each square patch.
     """
     def __init__(self, 
-                 n_holes = 3, 
+                 n_holes = 3,
                  length = 0.25):
         super(Cutout, self).__init__()
         self.max_holes = n_holes + 1
