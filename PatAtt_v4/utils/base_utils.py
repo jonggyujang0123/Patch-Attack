@@ -8,6 +8,158 @@ import shutil
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics import StructuralSimilarityIndexMeasure
 import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.transforms as transforms
+
+def sample_noise(n_disc, n_classes, class_ind, n_cont, n_z, batch_size, device):
+    z = torch.randn(batch_size, n_z, device=device)
+    idx = torch.randint(n_disc, size = (batch_size,)).to(device)
+    idx = idx * n_classes + class_ind
+    disc_c = F.one_hot(idx, n_disc * n_classes).float().to(device).view(batch_size, -1)
+    if n_cont != 0:
+        cont_c = torch.rand(batch_size, n_cont, device=device) * 2 - 1
+        #  cont_c = torch.randn(batch_size, n_cont, device=device)
+    else:
+        cont_c = torch.zeros(batch_size, 0).to(device)
+    noise = torch.cat([z, disc_c, cont_c], dim=1)
+    return noise, idx
+
+class AddGaussianNoise(nn.Module):
+    def __init__(self, mean=0., std=1.):
+        super(AddGaussianNoise, self).__init__()
+        self.std = std
+        self.mean = mean
+
+    def forward(self, x):
+        noise = torch.randn(x.size(), device=x.device) * self.std + self.mean
+        return x + noise
+
+
+
+class Sharpness(nn.Module):
+    def __init__(self,
+                 min_s = 0.5,
+                 max_s = 2.0,
+                 ):
+        super(Sharpness, self).__init__()
+        self.min_s = min_s
+        self.max_s = max_s
+
+    def forward(self, x):
+        s = torch.rand(1) * (self.max_s - self.min_s) + self.min_s
+        x = transforms.functional.adjust_sharpness(x, s)
+        return x
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(min_s={}, max_s={})'.format(self.min_s, self.max_s)
+
+
+
+class Cutout(nn.Module):
+    """Randomly mask out one or more patches from an image.
+    Args:
+        n_holes (int): Number of patches to cut out of each image.
+        length (int): The length (in pixels) of each square patch.
+    """
+    def __init__(self,
+                 n_holes = 4,
+                 length = 0.25,
+                 fill = 0.0,):
+        super(Cutout, self).__init__()
+        self.n_holes = n_holes
+        self.length = length
+        self.max_holes = n_holes + 1
+        self.max_length = length
+        self.fill = fill
+
+    def forward(self, img):
+        """
+        Args:
+            img (Tensor): Tensor image of size (C, H, W).
+        Returns:
+            Tensor: Image with n_holes of dimension length x length cut out of it.
+        """
+        n_holes = torch.randint(0, self.max_holes, [])
+        h = img.size(2)
+        w = img.size(3)
+        length_h = int(h * torch.rand(1) * self.max_length)
+        length_w = int(w* torch.rand(1) * self.max_length)
+
+        mask = torch.ones((h, w), dtype=torch.float32)
+
+        for n in range(n_holes):
+            y = torch.randint(0,h,())
+            x = torch.randint(0,w,())
+
+            y1 = torch.clip(y - length_h // 2, 0, h)
+            y2 = torch.clip(y + length_h // 2, 0, h)
+            x1 = torch.clip(x - length_w // 2, 0, w)
+            x2 = torch.clip(x + length_w // 2, 0, w)
+
+            mask[y1: y2, x1: x2] = 0.
+        mask = mask.expand_as(img).to(img.device)
+        if self.fill == 'random':
+            img = img * mask + torch.rand_like(img) * (1. - mask)
+        else:
+            img = img * mask + self.fill * (1. - mask)
+
+        return img
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(n_holes={0}, length={1})'.format(self.n_holes, self.length)
+
+class Mixup(nn.Module):
+    def __init__(
+            self,
+            alpha=1.0,
+            ):
+        super(Mixup, self).__init__()
+        self.alpha = alpha
+    def forward(self, x):
+        lam = np.random.beta(self.alpha, self.alpha)
+        batch_size = x.size()[0]
+        index = torch.randperm(batch_size).to(x.device)
+        mixed_x = lam * x + (1 - lam) * x[index, ...]
+        return mixed_x
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(alpha={})'.format(self.alpha)
+
+class CutMix(nn.Module):
+    def __init__(
+            self,
+            alpha=1.0,
+            ):
+        super(CutMix, self).__init__()
+        self.alpha = alpha
+
+    def rand_bbox(self, size, lam):
+        W = size[2]
+        H = size[3]
+        cut_rat = np.sqrt(1. - lam)
+        cut_w = int(W * cut_rat)
+        cut_h = int(H * cut_rat)
+        
+        # uniform
+        cx = np.random.randint(W)
+        cy = np.random.randint(H)
+        
+        bbx1 = np.clip(cx - cut_w // 2, 0, W)
+        bby1 = np.clip(cy - cut_h // 2, 0, H)
+        bbx2 = np.clip(cx + cut_w // 2, 0, W)
+        bby2 = np.clip(cy + cut_h // 2, 0, H)
+        
+        return bbx1, bby1, bbx2, bby2
+
+    def forward(self, x, y):
+        lam = np.random.beta(self.alpha, self.alpha)
+        batch_size = x.size()[0]
+        index = torch.randperm(batch_size).to(x.device)
+        bbx1, bby1, bbx2, bby2 = self.rand_bbox(x.size(), lam)
+        mask = torch.zeros_like(x).to(x.device)
+        mask[:, :, bbx1:bbx2, bby1:bby2] = 1
+        x = x * mask + x[index, ...] * (1 - mask)
+        return x, y, y[index], lam
 
 class PixelNorm(nn.Module):
     def __init__(self):

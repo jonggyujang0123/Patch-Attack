@@ -1,9 +1,8 @@
 """Import default libraries"""
 import os
-from models.resnet_32x32 import resnet10
-from models.CGAN import Generator, Discriminator, Cutout
+from models.CGAN import Generator, Discriminator, Qrator
 import torch.nn.functional as F
-from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader, noisy_labels, accuracy
+from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader, noisy_labels, accuracy, CutMix, Mixup, sample_noise, Sharpness, Cutout, AddGaussianNoise
 import torch.nn as nn
 import torch
 import wandb
@@ -14,7 +13,7 @@ import numpy as np
 from einops import rearrange
 import argparse
 import torchvision.transforms as transforms
-
+import itertools
 def para_config():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
 
@@ -30,17 +29,16 @@ def para_config():
             default= 64)
     parser.add_argument("--test-batch-size",
             type=int,
-            default=100)
+            default=40)
     parser.add_argument("--random-seed",
             type=int,
             default=0)
     parser.add_argument("--eval-every",
             type=int,
-            default=10)
+            default=1)
     parser.add_argument("--pin-memory",
             type=bool,
             default=True)
-
     # hyperparameter for generator and discrminator
     parser.add_argument("--patch-size",
             type=int,
@@ -59,6 +57,14 @@ def para_config():
             type=int,
             default=192,
             help="number of discriminator feature base")
+    parser.add_argument("--n-qf",
+            type=int,
+            default=32,
+            help="number of info feature base")
+    parser.add_argument("--level-q",
+            type=int,
+            default=2,
+            help="level of Conv layer in Info")
     parser.add_argument("--level-g",
             type=int,
             default=2,
@@ -69,11 +75,28 @@ def para_config():
             help="level of Conv layer in Discrim")
     parser.add_argument("--latent-size",
             type=int,
-            default=100)
+            default=28)
+    parser.add_argument("--n-disc",
+            type=int,
+            default=3,
+            help="number of discriminator")
+    parser.add_argument("--target-classes",
+            type=int,
+            default=4)
+    parser.add_argument("--n-cont",
+            type=int,
+            default=0,
+            help="number of continuous variable")
     parser.add_argument("--w-attack",
             type=float,
             default=1.0)
     parser.add_argument("--w-mr",
+            type=float,
+            default=0.0)
+    parser.add_argument("--w-disc",
+            type=float,
+            default=1.0)
+    parser.add_argument("--w-cont",
             type=float,
             default=0.0)
     parser.add_argument("--gan-labelsmooth",
@@ -82,9 +105,6 @@ def para_config():
     parser.add_argument("--epoch-pretrain",
             type=int,
             default=-1)
-    parser.add_argument("--x-sample",
-            type=int,
-            default=1)
     parser.add_argument('--transform', default=False, action=argparse.BooleanOptionalAction)
 
     # dataset 
@@ -134,9 +154,6 @@ def para_config():
             type=float,
             default=1e-4,
             help = "learning rate")
-    parser.add_argument("--target-class",
-            type=int,
-            default=0)
     args = parser.parse_args()
     
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -165,72 +182,125 @@ def para_config():
         args.num_channel = 3
         args.img_size = 64
         args.num_classes = 1000
+
+    if args.target_dataset in ['mnist', 'emnist']:
+        # ADD SOME ARGUMENTS
+        args.abc= 0.0
+
     return args
 
-class TRANS_classifier(nn.Module):
+class AUGMENT_FWD(nn.Module):
     def __init__(
             self,
-            classifier,
-            args
             ):
-        super(TRANS_classifier, self).__init__() 
-        self.crop = nn.Sequential(
-                transforms.RandomRotation(5, fill=-1),
-                transforms.FiveCrop(26),
+        super(AUGMENT_FWD, self).__init__()
+        self.trans = torch.nn.Sequential(
+                #  CutMix(),
+                #  Mixup()
+                transforms.RandomApply(
+                    [transforms.RandomRotation(22, fill=-1, expand=True)],
+                    p=1.0),
+                transforms.RandomApply(
+                    [transforms.RandomResizedCrop(32, scale=(0.75, 1.0), ratio=(1.0, 1.0))],
+                    p=1.0),
+                #  transforms.RandomApply(
+                #      [transforms.RandomRotation(10, fill=-1, expand=True)],
+                #      p=1.0),
+                transforms.Resize(32),
+                #  AddGaussianNoise(0.,0.3),
+                #  Cutout(
+                    #  n_holes=4,
+                    #  length=0.25,
+                    #  fill='random',
+                    #  ),
+                #  transforms.RandomApply(
+                #      [
+                #          transforms.GaussianBlur(3, sigma=(0.1, 2.0)),
+                #          ],
+                #      p=1.0),
                 )
-        self.classifier = classifier
-        self.pad = nn.Sequential(
-                transforms.Resize((30, 30)),
-                #  transforms.Resize((args.img_size, args.img_size)),
-                transforms.Pad(1, fill=-1),
-                #  transforms.Resize((args.img_size, args.img_size)),
-                )
-        self.cutout = Cutout()
-        print(self.crop)
-        print(self.pad)
-    def forward(self, x):
-        b, c, h, w = x.size()
-        if np.random.rand() < 0.6:
-            x = torch.cat(self.crop(x))
-            x = self.pad(x)
-            x = self.cutout(x)
-            x = self.classifier(x)
-            x = x.view(b, 5, -1)
-            x = x.mean(dim=1)
-        else:
-            x = self.classifier(x)
+        self.iterations=1
+        print(self.trans)
+        self.resolution = [
+                nn.Identity(),
+                #  nn.Sequential(
+                #      nn.AvgPool2d(2),
+                #      nn.Upsample(scale_factor=2, mode='nearest'),
+                #      ),
+                #  nn.Sequential(
+                #      nn.AvgPool2d(4),
+                #      nn.Upsample(scale_factor=4, mode='nearest'),
+                #      ),
+                #  nn.Sequential(
+                #      nn.AvgPool2d(8),
+                #      nn.Upsample(scale_factor=8, mode='nearest'),
+                #      ),
+                #  transforms.GaussianBlur(3, sigma=(1, 5)),
+                #  transforms.GaussianBlur(3, sigma=(0.1, 2.0)),
+                #  transforms.GaussianBlur(7, sigma=(w_blur * 3**0.5)),
+                #  transforms.GaussianBlur(9, sigma=(w_blur * 4**0.5)),
+                ]
+        print(self.resolution)
+
+    def change_resolution(self,x):
+        index = torch.randint(0, len(self.resolution), (1,))[0]
+        x = self.resolution[index](x)
         return x
 
-def train(wandb, args, classifier, classifier_val, G, D):
-    trans_cls = TRANS_classifier(
-            classifier=classifier,
-            args=args,
-            ).to(args.device)
+    def forward(self, x):
+        b, c, h, w = x.size()
+        #  x = [self.change_resolution(self.trans(x)) for _ in range(self.iterations)]
+        x = [x] + [self.change_resolution(self.trans(x)) for _ in range(self.iterations-1)]
+        #  x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
+        x = torch.cat(x)
+        #  x = torch.cat([x, x.view(self.iterations-1, b, c, h, w).mean(dim=0)])
+        #  x = self.classifier(torch.cat(x)).view(self.iterations, b, -1).mean(dim=0)
+        #  x = model(torch.cat(x)).view(self.iterations, b, -1)
+        #  x_mr = x.mean(dim=0)
+        #  x = x.softmax(dim=-1).mean(dim=0).log()
+        #  x = x.mean(dim=0).softmax(dim=-1).log()
+        #  x = torch.log(x/(1-x))
+        return x
 
-    cut_out = Cutout()
-    fixed_z = torch.randn(
-            args.test_batch_size,
-            args.latent_size,
+def train(wandb, args, classifier, classifier_val, G, D, Q):
+    aug = AUGMENT_FWD(
             ).to(args.device)
-    fixed_c = torch.LongTensor(
-            args.test_batch_size,
-            ).fill_(args.target_class).to(args.device)
-    BCE_loss = nn.BCELoss()
+    #  cutmix = CutMix(
+            #  ).to(args.device)
+    fixed_c = torch.arange(args.target_classes).repeat(args.test_batch_size//args.target_classes).to(args.device)
+    fixed_z, _ = sample_noise(
+            n_disc = args.n_disc,
+            n_classes = args.target_classes,
+            class_ind = fixed_c,
+            n_cont = args.n_cont,
+            n_z = args.latent_size,
+            batch_size = args.test_batch_size,
+            device = args.device,
+            )
+    GAN_loss = nn.MSELoss()
     CE_loss = nn.CrossEntropyLoss()
-    optimizer_g = optim.Adam(G.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
+    NLL_loss = nn.NLLLoss()
+    MSE_loss = nn.MSELoss()
+    #  optimizer_g = optim.Adam(G.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     optimizer_d = optim.Adam(D.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
+    optimizer_info = optim.Adam(
+            itertools.chain(Q.parameters(), G.parameters()),
+            lr =args.lr, betas = (args.beta_1, args.beta_2))
+            
     train_loader, _, _ = get_data_loader(args= args, dataset_name= args.aux_dataset)
     if args.decay_type == "cosine":
-        scheduler_g = WarmupCosineSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
+        #  scheduler_g = WarmupCosineSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
         scheduler_d = WarmupCosineSchedule(optimizer_d, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
+        scheduler_info = WarmupCosineSchedule(optimizer_info, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
     else:
-        scheduler_g = WarmupLinearSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
+        #  scheduler_g = WarmupLinearSchedule(optimizer_g, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
         scheduler_d = WarmupLinearSchedule(optimizer_d, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
+        scheduler_info = WarmupLinearSchedule(optimizer_info, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
     start_epoch = 0
     
     Loss_g = AverageMeter()
     Loss_d = AverageMeter()
-    Loss_info = AverageMeter()
+    Loss_q = AverageMeter()
     D_x_total = AverageMeter()
     D_G_z_total = AverageMeter()
     Acc_total_t = AverageMeter()
@@ -246,7 +316,8 @@ def train(wandb, args, classifier, classifier_val, G, D):
         # Switch Training Mode
         G.train()
         D.train()
-#        w_attack = np.clip( epoch / args.epochs *10, 0.0, 1.0) * args.w_attack
+        Q.train()
+        #  w_attack = np.clip( epoch / args.epochs, 0.0, 1.0) * args.w_attack
         w_attack = args.w_attack
         tepoch = tqdm(train_loader,
                 bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}',
@@ -257,65 +328,89 @@ def train(wandb, args, classifier, classifier_val, G, D):
             optimizer_d.zero_grad()
             x_real= data[0].to(args.device, 
                     non_blocking=True)
-            d_logit_t = D(x_real, transform = args.transform)
-            real_target = torch.ones(d_logit_t.size(0)).to(args.device)
-            fake_target = torch.zeros(d_logit_t.size(0)).to(args.device)
-            err_real_d = BCE_loss(d_logit_t.view(-1),real_target - args.gan_labelsmooth)
+            d_logit_t = D(x_real)
+            real_target = torch.ones(d_logit_t.size(0), 1).to(args.device)
+            fake_target = torch.zeros(d_logit_t.size(0), 1).to(args.device)
+            err_real_d = GAN_loss(d_logit_t,real_target - args.gan_labelsmooth)
+            #  err_real_d = GAN_loss(d_logit_t,real_target)
             D_x = d_logit_t.view(-1).detach().mean().item()
             D_x_total.update(D_x, d_logit_t.size(0))
             
             # (2) update discrminator (fake data)
 
-            latent_vector = torch.randn(x_real.size(0), args.latent_size).to(args.device)
-
-            c = torch.LongTensor(x_real.size(0)).fill_(args.target_class).to(args.device)
+            c = torch.randint(0, args.target_classes, (x_real.size(0),)).to(args.device)
+            latent_vector, idx = sample_noise(
+                    n_disc = args.n_disc,
+                    n_classes = args.target_classes,
+                    class_ind = c,
+                    n_cont = args.n_cont,
+                    n_z = args.latent_size,
+                    batch_size = x_real.size(0),
+                    device = args.device,
+                    )
+            #  torch.LongTensor(x_real.size(0)).fill_(args.target_class).to(args.device)
             x_fake = G(latent_vector)
-            d_logit_f = D(x_fake.detach(), transform = args.transform)
-            #  err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target + args.gan_labelsmooth)
-            err_fake_d = BCE_loss(d_logit_f.view(-1), fake_target)
+            d_logit_f = D(x_fake.detach(), real=False)
+            #  err_fake_d = GAN_loss(d_logit_f, fake_target)
+            err_fake_d = GAN_loss(d_logit_f, fake_target + args.gan_labelsmooth)
             D_loss = err_real_d + err_fake_d
 
             D_loss.backward()
             optimizer_d.step()
+            scheduler_d.step()
             err_d = (err_fake_d + err_real_d)
             Loss_d.update(err_d.detach().mean().item(), d_logit_t.size(0))
-            # (3) Generator update
-            optimizer_g.zero_grad()
-            outputs= D.forward(x_fake, transform = args.transform)
-            #  err_g = BCE_loss(outputs.view(-1) , real_target - args.gan_labelsmooth)
-            err_g = BCE_loss(outputs.view(-1) , real_target)
+            
+            # (3) Update Qrator and Generator
+            optimizer_info.zero_grad()
+            x_fake_aug = aug(x_fake)
+            #  q = Q(x_fake_aug).view(aug.iterations, x_fake.size(0), -1)
+            #  q_mr = q.mean(dim=0)
+            q = Q(x_fake).view(x_fake.size(0), -1)
+            q_mr = q
+            #  logit_q = q.softmax(dim=-1).mean(dim=0).log()
+            
+            logit_q = q_mr[:, :args.n_disc * args.target_classes]
+            q_cont = q_mr[:, args.n_disc * args.target_classes:]
 
-            # (4) MI_loss Loss 
-            #  x_fake = trans(x_fake)
-            #  D_disc = classifier(trans(x_fake))
-            D_disc = trans_cls(x_fake)
-            loss_attack = CE_loss(D_disc, c)
-            info_loss = (w_attack * loss_attack) #/ D.n_patches
-            mr_loss = args.w_mr * ( - D_disc[:,args.target_class].mean() )
-            #  mr_loss_o = args.w_mr * ( D_disc[:, torch.arange(args.num_classes) != args.target_class].mean())
-            if epoch > args.epoch_pretrain:
-                #  total_loss = err_g + info_loss + mr_loss +  mr_loss_o
-                total_loss = err_g + info_loss + mr_loss
-                #  total_loss = info_loss + mr_loss #+ mr_loss_av
+            outputs= D(x_fake, real=False)
+            err_g = GAN_loss(outputs , real_target)
+            
+            q_loss = 0.0
+            if args.n_disc != 0:
+                q_loss += CE_loss(logit_q.reshape(-1, args.target_classes * args.n_disc), idx.view(-1)) * args.w_disc
+            if args.n_cont != 0:
+                q_loss += MSE_loss(q_cont, latent_vector[:, args.latent_size + args.n_disc * args.target_classes:]) * args.w_cont
+            cls = classifier(x_fake_aug).view(aug.iterations, x_fake.size(0), -1)
+            #  logit_att = cls.softmax(dim=-1).mean(dim=0).log()
+            logit_att = cls.mean(dim=0).softmax(dim=-1).log()
+            mr_att = cls.mean(dim=0)
+#
+            #  loss_att = w_attack * CE_loss(mr_att, c)
+            loss_att = w_attack * NLL_loss(logit_att, c)
+            mr_loss = 0.0
+            if args.w_mr != 0:
+                mr_loss = args.w_mr * ( - mr_att[range(x_fake.size(0)),c].mean() )
+            
+            if epoch < args.epoch_pretrain:
+                total_loss = err_g + q_loss
             else:
-                total_loss = err_g
+                total_loss = err_g + loss_att + q_loss + mr_loss
             total_loss.backward()
-            optimizer_g.step()
-
-            scheduler_d.step()
-            scheduler_g.step()
-
-            train_acc_target = D_disc.softmax(1)[:, args.target_class].mean().item() 
+            optimizer_info.step()
+            scheduler_info.step()
+            train_acc_target = mr_att.softmax(1)[range(mr_att.size(0)), c].mean().item()
+            #  train_acc_target = logit_att.softmax(1)[range(logit_att.size(0)), c].mean().item()
 
             Acc_total_t.update(train_acc_target, x_real.size(0))
             Loss_g.update(err_g.detach().item(), x_real.size(0))
-            Loss_info.update(info_loss.detach().item(), x_real.size(0))
+            Loss_q.update(q_loss.detach().item(), x_real.size(0))
             D_G_z_total.update(outputs.mean().item(), x_real.size(0))
-            Max_act.update(D_disc.max(1)[0].mean().item(), x_real.size(0))
-            tepoch.set_description(f'Ep {epoch}: L_D : {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_info: {Loss_info.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}, Max_A: {Max_act.avg:2.1f}')
+            Max_act.update(loss_att.mean().item() / w_attack, x_real.size(0))
+            tepoch.set_description(f'Ep {epoch}: L_D: {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_Q: {Loss_q.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}, MR: {Max_act.avg:2.1f}')
         # (5) After end of epoch, save result model
         if epoch % args.eval_every == args.eval_every - 1 or epoch==0:
-            _, images = evaluate(wandb, args, trans_cls, G, D, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
+            _, images = evaluate(wandb, args, classifier_val, G, D, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
             model_to_save_g = G.module if hasattr(G, 'module') else G
             model_to_save_d = D.module if hasattr(D, 'module') else D
             ckpt = {
@@ -327,7 +422,7 @@ def train(wandb, args, classifier, classifier_val, G, D):
                 wandb.log({
                     "loss_D" : Loss_d.avg,
                     "Loss_G" : Loss_g.avg,
-                    "Loss_Info" : Loss_info.avg,
+                    "Loss_Q" : Loss_q.avg,
                     "D(x)" : D_x_total.avg,
                     "D(G(z))" : D_G_z_total.avg,
                     "val_acc_t" : Acc_total_t.avg,
@@ -336,7 +431,7 @@ def train(wandb, args, classifier, classifier_val, G, D):
                     step = epoch)
         Loss_g.reset()
         Loss_d.reset()
-        Loss_info.reset()
+        Loss_q.reset()
         D_G_z_total.reset()
         D_x_total.reset()
         Acc_total_t.reset()
@@ -345,25 +440,28 @@ def train(wandb, args, classifier, classifier_val, G, D):
 
 def evaluate(wandb, args, classifier, G, D, fixed_z=None, fixed_c = None, epoch = 0):
     G.eval()
-    if fixed_z == None:
-        fixed_z = torch.randn(
-                args.test_batch_size, 
-                args.latent_size,
-                ).to(args.device)
-    if fixed_c == None:
-        fixed_c = torch.Long(
-                args.test_batch_size,
-                ).fill_(args.target_class).to(args.device)
+    if fixed_c == None and fixed_z == None:
+        fixed_c = torch.randint(0, args.target_classes, (args.test_batch_size,)).to(args.device) 
+        #  torch.Long(
+        #          args.test_batch_size,
+        #          ).fill_(args.target_class).to(args.device)
+        fixed_z, _ = sample_noise(
+                n_disc=args.n_disc,
+                n_classes=args.target_classes,
+                class_ind = fixed_c,
+                n_cont=args.n_cont,
+                n_z = args.latent_size,
+                batch_size=args.test_batch_size,
+                device=args.device,
+                )
     val_acc = 0 
     x_fake = G(fixed_z)
     pred = classifier( x_fake)
-    fake_y = fixed_c
-    val_acc = (pred.max(1)[1] == fake_y).float().mean().item()
-    arg_sort = (torch.log(D(x_fake)[:,0] + 1e-8) + args.w_attack*torch.log(pred.softmax(dim=1)[:, fixed_c[0]])).argsort(descending=True)
-    x_fake = x_fake[arg_sort, ...]
+    val_acc = (pred.max(1)[1] == fixed_c).float().mean().item()
+    #  arg_sort = (torch.log(D(x_fake)[:,0] + 1e-8) + args.w_attack*torch.log(pred.softmax(dim=1)[:, fixed_c[0]])).argsort(descending=True)
+    #  x_fake = x_fake[arg_sort, ...]
     x_fake = x_fake.reshape(
-            args.test_batch_size//10,
-            10,
+            args.test_batch_size//args.target_classes, args.target_classes,
             args.num_channel, args.img_size, args.img_size)
     if args.num_channel == 1:
         x_fake = F.pad(x_fake, (1,1,1,1), value=1)
@@ -397,16 +495,24 @@ def test(wandb, args, classifier_val, G):
     FID_val = AverageMeter()
     FID_val_total = []
     target_dataset, _, _ = get_data_loader(args, args.target_dataset, class_wise = True)
-    for class_ind in range(min(args.num_classes, args.max_classes)):
+    for class_ind in range(args.target_classes):
         dataset = target_dataset[class_ind]
         pbar = tqdm(enumerate(dataset), total=len(dataset))
         fid = FrechetInceptionDistance(feature=64, compute_on_cpu = True).to(args.device)
         ssim = StructuralSimilarityIndexMeasure(data_range=1.0, channel = args.num_channel, compute_on_gpu=True).to(args.device)
         for batch_idx, (x, y) in pbar:
-            fixed_z = torch.randn(
+            fixed_c = torch.LongTensor(
                     y.shape[0],
-                    args.latent_size,
-                    ).to(args.device)
+                    ).fill_(class_ind).to(args.device)
+            fixed_z = sample_noise(
+                    n_disc=args.n_disc,
+                    n_classes=args.target_classes,
+                    class_ind = fixed_c,
+                    n_cont=args.n_cont,
+                    n_z = args.latent_size,
+                    batch_size=y.shape[0],
+                    device=args.device,
+                    )
             label = y.to(args.device)
             fake = G(fixed_z)
             fake = fake.detach()
@@ -492,7 +598,7 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     
     if args.img_size == 32:
-        from models.resnet_32x32 import resnet10 as resnet
+        from models.resnet import resnet10 as resnet
         from models.resnet_32x32 import resnet50 as resnet_val
     else:
         from models.resnet import resnet34 as resnet
@@ -509,10 +615,12 @@ def main():
     G = Generator(
             img_size = args.img_size,
             latent_size = args.latent_size,
-            #  num_classes = args.tmp_classes,
             levels= args.level_g,
             n_gf = args.n_gf,
             n_c = args.num_channel,
+            n_disc= args.n_disc,
+            n_cont = args.n_cont,
+            num_classes = args.target_classes,
             ).to(args.device)
     print(G)
     D = Discriminator(
@@ -521,12 +629,22 @@ def main():
             patch_stride= args.patch_stride,
             patch_padding = args.patch_padding,
             n_df = args.n_df,
-            n_c = args.num_channel, 
+            n_c = args.num_channel,
             ).to(args.device)
-
+    print(D)
+    Q = Qrator(
+            img_size= args.img_size, 
+            n_qf = args.n_qf,
+            levels = args.level_q,
+            n_c = args.num_channel,
+            n_disc= args.n_disc,
+            n_classes = args.target_classes,
+            n_cont = args.n_cont,
+            ).to(args.device)
+    print(Q)
 
     if os.path.exists(args.ckpt_path):
-        ckpt = load_ckpt(args.ckpt_path, is_best = False)
+        ckpt = load_ckpt(args.ckpt_path, is_best = True)
         classifier.load_state_dict(ckpt['model'])
         classifier.eval()
         print(f'{args.ckpt_path} model is loaded!')
@@ -550,7 +668,7 @@ def main():
     if args.test:
         test(wandb, args,  classifier_val, G)
     else:
-        train(wandb, args, classifier, classifier_val, G, D)
+        train(wandb, args, classifier, classifier_val, G, D, Q)
     wandb.finish()
 
 

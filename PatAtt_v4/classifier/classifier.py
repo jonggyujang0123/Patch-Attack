@@ -246,10 +246,12 @@ def main():
     
     if args.img_size == 32:    
         if args.valid:
-            from models.resnet_32x32 import resnet50 as resnet
+            #  from models.resnet_32x32 import resnet50 as resnet
+            from models.resnet import resnet50 as resnet
             set_random_seeds(random_seed = 7)
         else:
-            from models.resnet_32x32 import resnet10 as resnet
+            #  from models.resnet_32x32 import resnet10 as resnet
+            from models.resnet import resnet10 as resnet
             set_random_seeds(random_seed = 0)
     else:
         if args.valid:

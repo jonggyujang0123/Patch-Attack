@@ -13,20 +13,11 @@ import numpy as np
 
 def get_loader_emnist(args, class_wise = None):
     transform_train = transforms.Compose([
-#                                    transforms.RandomHorizontalFlip(p=.5),
-#                                    transforms.RandomVerticalFlip(p=.5),
-#                                    transforms.RandomRotation(23),
-#                                    transforms.RandomAffine(degrees=(30, 70), translate=(0.1, 0.3), scale = (1.0, 1.2)),
-#                                    transforms.ColorJitter(
-#                                        brightness = (0.7, 2),
-#                                        contrast=(0.7, 2),
-#                                        ),
-#                                    transforms.RandomPerspective(distortion_scale=0.6, p=1.0),
-#                                    transforms.RandomInvert(0.1),
                                     lambda img: transforms.functional.rotate(img, -90),
                                     lambda img: transforms.functional.hflip(img),
+                                    transforms.RandomRotation(10),
+                                    transforms.RandomResizedCrop(32, scale=(0.9, 1.0), ratio=(1.0,1.0)),
                                     transforms.Resize((args.img_size, args.img_size)),
-#                                    transforms.AugMix(),
                                     transforms.ToTensor(),
                                     transforms.Normalize((0.5,), (0.5,))])
     transform_val = transforms.Compose([
