@@ -11,11 +11,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 
-def sample_noise(n_disc, n_classes, class_ind, n_cont, n_z, batch_size, device):
+def sample_noise(n_disc, n_cont, n_z, batch_size, device):
     z = torch.randn(batch_size, n_z, device=device)
     idx = torch.randint(n_disc, size = (batch_size,)).to(device)
-    idx = idx * n_classes + class_ind
-    disc_c = F.one_hot(idx, n_disc * n_classes).float().to(device).view(batch_size, -1)
+    disc_c = F.one_hot(idx, n_disc).float().to(device).view(batch_size, -1)
     if n_cont != 0:
         cont_c = torch.rand(batch_size, n_cont, device=device) * 2 - 1
         #  cont_c = torch.randn(batch_size, n_cont, device=device)

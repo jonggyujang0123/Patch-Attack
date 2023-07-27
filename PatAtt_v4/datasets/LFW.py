@@ -14,7 +14,7 @@ import numpy as np
 def get_loader_LFW(args, class_wise=False):
     transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.CenterCrop(160),
+        transforms.CenterCrop(128),
         transforms.Resize(64),
         transforms.ToTensor(),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
@@ -22,12 +22,14 @@ def get_loader_LFW(args, class_wise=False):
     dataset_train = datasets.LFWPeople(
         root='../data',
         split='train',
+        image_set='deepfunneled',
         transform=transform,
         download=True
         )
     dataset_test = datasets.LFWPeople(
         root='../data',
         split='test',
+        image_set='deepfunneled',
         transform=transform,
         download=True
         )

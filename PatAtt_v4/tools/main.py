@@ -1,7 +1,7 @@
 """Import default libraries"""
 import os
-from models.CGAN import Generator, Discriminator, Qrator
 import torch.nn.functional as F
+from models.CGAN import Generator, Discriminator, Qrator
 from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, load_ckpt, save_ckpt, get_data_loader, noisy_labels, accuracy, CutMix, Mixup, sample_noise, Sharpness, Cutout, AddGaussianNoise
 import torch.nn as nn
 import torch
@@ -29,7 +29,10 @@ def para_config():
             default= 64)
     parser.add_argument("--test-batch-size",
             type=int,
-            default=40)
+            default=100)
+    parser.add_argument("--visualize-nrow",
+            type=int,
+            default=10)
     parser.add_argument("--random-seed",
             type=int,
             default=0)
@@ -40,26 +43,33 @@ def para_config():
             type=bool,
             default=True)
     # hyperparameter for generator and discrminator
-    parser.add_argument("--patch-size",
-            type=int,
-            default=8)
-    parser.add_argument("--patch-stride",
-            type=int,
-            default=2)
-    parser.add_argument("--patch-padding",
-            type=int,
-            default=2)
     parser.add_argument("--n-gf",
             type=int,
             default=64,
             help="number of generating feature base")
     parser.add_argument("--n-df",
             type=int,
-            default=192,
+            default=64,
             help="number of discriminator feature base")
+    #  parser.add_argument("--scale-factor",
+    #          type=int,
+    #          default=4,
+    #          help="scale factor of discriminator")
+    parser.add_argument("--patch-size",
+            type=int,
+            default=4,
+            help="patch size of discriminator")
+    parser.add_argument("--patch-stride",
+            type=int,
+            default=2,
+            help="patch stride of discriminator")
+    parser.add_argument("--patch-padding",
+            type=int,
+            default=0,
+            help="patch padding of discriminator")
     parser.add_argument("--n-qf",
             type=int,
-            default=32,
+            default=64,
             help="number of info feature base")
     parser.add_argument("--level-q",
             type=int,
@@ -71,18 +81,22 @@ def para_config():
             help="level of Conv layer in Generator")
     parser.add_argument("--level-d",
             type=int,
-            default=4,
+            default=3,
             help="level of Conv layer in Discrim")
+    #  parser.add_argument("--d-ksize"
+    #          ,type=int,
+    #          default=4,
+    #          help="kernel size of discriminator")
     parser.add_argument("--latent-size",
             type=int,
-            default=28)
+            default=100)
+    parser.add_argument("--target-class",
+            type=int,
+            default=1)
     parser.add_argument("--n-disc",
             type=int,
-            default=3,
+            default=2,
             help="number of discriminator")
-    parser.add_argument("--target-classes",
-            type=int,
-            default=4)
     parser.add_argument("--n-cont",
             type=int,
             default=0,
@@ -98,14 +112,13 @@ def para_config():
             default=1.0)
     parser.add_argument("--w-cont",
             type=float,
-            default=0.0)
+            default=0.3)
     parser.add_argument("--gan-labelsmooth",
             type=float,
             default=0.0)
     parser.add_argument("--epoch-pretrain",
             type=int,
             default=-1)
-    parser.add_argument('--transform', default=False, action=argparse.BooleanOptionalAction)
 
     # dataset 
     parser.add_argument("--aux-dataset",
@@ -152,13 +165,13 @@ def para_config():
             default=100)
     parser.add_argument("--lr",
             type=float,
-            default=1e-4,
+            default=2e-4,
             help = "learning rate")
     args = parser.parse_args()
     
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args.ckpt_path = os.path.join(args.ckpt_dir, 'classifier', args.target_dataset)
-    if args.target_dataset in ['mnist', 'fashionmnist', 'kmnist', 'HAN']:
+    if args.target_dataset in ['mnist', 'fashion', 'kmnist', 'HAN']:
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 10
@@ -192,65 +205,50 @@ def para_config():
 class AUGMENT_FWD(nn.Module):
     def __init__(
             self,
+            args,
             ):
         super(AUGMENT_FWD, self).__init__()
-        self.trans = torch.nn.Sequential(
-                #  CutMix(),
-                #  Mixup()
-                transforms.RandomApply(
-                    [transforms.RandomRotation(22, fill=-1, expand=True)],
-                    p=1.0),
-                transforms.RandomApply(
-                    [transforms.RandomResizedCrop(32, scale=(0.75, 1.0), ratio=(1.0, 1.0))],
-                    p=1.0),
-                #  transforms.RandomApply(
-                #      [transforms.RandomRotation(10, fill=-1, expand=True)],
-                #      p=1.0),
-                transforms.Resize(32),
-                #  AddGaussianNoise(0.,0.3),
-                #  Cutout(
-                    #  n_holes=4,
-                    #  length=0.25,
-                    #  fill='random',
-                    #  ),
-                #  transforms.RandomApply(
-                #      [
-                #          transforms.GaussianBlur(3, sigma=(0.1, 2.0)),
-                #          ],
-                #      p=1.0),
-                )
-        self.iterations=1
+        if args.target_dataset in ['mnist', 'emnist', 'fashion']:
+            self.trans = torch.nn.Sequential(
+                    #  CutMix(),
+                    #  Mixup(),
+                    transforms.RandomRotation(15, fill=-1, expand=True),
+                    transforms.RandomRotation(15, fill=-1, expand=False),
+                    transforms.RandomResizedCrop(args.img_size, scale=(0.75, 1.0), ratio=(1.0, 1.0)),
+                    transforms.RandomAffine(
+                        degrees=0,
+                        translate=(0.1, 0.1),
+                        fill=-1),
+                    transforms.Resize(args.img_size),
+                    )
+        elif args.target_dataset in ['celeba', 'cinic10', 'cifar10', 'cifar100', 'LFW']:
+            self.trans = torch.nn.Sequential(
+                    #  CutMix(),
+                    #  Mixup(),
+                    transforms.RandomResizedCrop(args.img_size, scale=(0.9, 1.0), ratio=(1.0, 1.0)),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    #  transforms.RandomAffine(
+                    #      degrees=0,
+                    #      translate=(0.05, 0.05),
+                    #      fill=0),
+                    #  Cutout(
+                    #      n_holes=3,
+                    #      length=0.1,
+                    #      fill=0,
+                    #      ),
+                    transforms.Resize(args.img_size),
+                    #  AddGaussianNoise(0.,0.3),
+                    #  transforms.RandomApply(
+                    #      [transforms.GaussianBlur(3, sigma=(0.1, 2.0))],
+                    #      p=1.0),
+                    )
+        self.iterations=8
         print(self.trans)
-        self.resolution = [
-                nn.Identity(),
-                #  nn.Sequential(
-                #      nn.AvgPool2d(2),
-                #      nn.Upsample(scale_factor=2, mode='nearest'),
-                #      ),
-                #  nn.Sequential(
-                #      nn.AvgPool2d(4),
-                #      nn.Upsample(scale_factor=4, mode='nearest'),
-                #      ),
-                #  nn.Sequential(
-                #      nn.AvgPool2d(8),
-                #      nn.Upsample(scale_factor=8, mode='nearest'),
-                #      ),
-                #  transforms.GaussianBlur(3, sigma=(1, 5)),
-                #  transforms.GaussianBlur(3, sigma=(0.1, 2.0)),
-                #  transforms.GaussianBlur(7, sigma=(w_blur * 3**0.5)),
-                #  transforms.GaussianBlur(9, sigma=(w_blur * 4**0.5)),
-                ]
-        print(self.resolution)
-
-    def change_resolution(self,x):
-        index = torch.randint(0, len(self.resolution), (1,))[0]
-        x = self.resolution[index](x)
-        return x
 
     def forward(self, x):
-        b, c, h, w = x.size()
-        #  x = [self.change_resolution(self.trans(x)) for _ in range(self.iterations)]
-        x = [x] + [self.change_resolution(self.trans(x)) for _ in range(self.iterations-1)]
+        #  b, c, h, w = x.size()
+        x = [self.trans(x) for _ in range(self.iterations)]
+        #  x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
         #  x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
         x = torch.cat(x)
         #  x = torch.cat([x, x.view(self.iterations-1, b, c, h, w).mean(dim=0)])
@@ -264,14 +262,12 @@ class AUGMENT_FWD(nn.Module):
 
 def train(wandb, args, classifier, classifier_val, G, D, Q):
     aug = AUGMENT_FWD(
+            args = args,
             ).to(args.device)
     #  cutmix = CutMix(
             #  ).to(args.device)
-    fixed_c = torch.arange(args.target_classes).repeat(args.test_batch_size//args.target_classes).to(args.device)
     fixed_z, _ = sample_noise(
             n_disc = args.n_disc,
-            n_classes = args.target_classes,
-            class_ind = fixed_c,
             n_cont = args.n_cont,
             n_z = args.latent_size,
             batch_size = args.test_batch_size,
@@ -329,8 +325,8 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             x_real= data[0].to(args.device, 
                     non_blocking=True)
             d_logit_t = D(x_real)
-            real_target = torch.ones(d_logit_t.size(0), 1).to(args.device)
-            fake_target = torch.zeros(d_logit_t.size(0), 1).to(args.device)
+            real_target = torch.ones(d_logit_t.size()).to(args.device)
+            fake_target = torch.zeros(d_logit_t.size()).to(args.device)
             err_real_d = GAN_loss(d_logit_t,real_target - args.gan_labelsmooth)
             #  err_real_d = GAN_loss(d_logit_t,real_target)
             D_x = d_logit_t.view(-1).detach().mean().item()
@@ -338,17 +334,14 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             
             # (2) update discrminator (fake data)
 
-            c = torch.randint(0, args.target_classes, (x_real.size(0),)).to(args.device)
             latent_vector, idx = sample_noise(
                     n_disc = args.n_disc,
-                    n_classes = args.target_classes,
-                    class_ind = c,
                     n_cont = args.n_cont,
                     n_z = args.latent_size,
                     batch_size = x_real.size(0),
                     device = args.device,
                     )
-            #  torch.LongTensor(x_real.size(0)).fill_(args.target_class).to(args.device)
+            c = torch.LongTensor(x_real.size(0)).fill_(args.target_class).to(args.device)
             x_fake = G(latent_vector)
             d_logit_f = D(x_fake.detach(), real=False)
             #  err_fake_d = GAN_loss(d_logit_f, fake_target)
@@ -370,24 +363,23 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             q_mr = q
             #  logit_q = q.softmax(dim=-1).mean(dim=0).log()
             
-            logit_q = q_mr[:, :args.n_disc * args.target_classes]
-            q_cont = q_mr[:, args.n_disc * args.target_classes:]
+            logit_q = q_mr[:, :args.n_disc]
+            q_cont = q_mr[:, args.n_disc:]
 
             outputs= D(x_fake, real=False)
             err_g = GAN_loss(outputs , real_target)
             
             q_loss = 0.0
             if args.n_disc != 0:
-                q_loss += CE_loss(logit_q.reshape(-1, args.target_classes * args.n_disc), idx.view(-1)) * args.w_disc
+                q_loss += CE_loss(logit_q.reshape(-1, args.n_disc), idx.view(-1)) * args.w_disc
             if args.n_cont != 0:
-                q_loss += MSE_loss(q_cont, latent_vector[:, args.latent_size + args.n_disc * args.target_classes:]) * args.w_cont
+                q_loss += MSE_loss(q_cont, latent_vector[:, args.latent_size + args.n_disc:]) * args.w_cont
             cls = classifier(x_fake_aug).view(aug.iterations, x_fake.size(0), -1)
-            #  logit_att = cls.softmax(dim=-1).mean(dim=0).log()
-            logit_att = cls.mean(dim=0).softmax(dim=-1).log()
+            logit_att = cls.mean(dim=0).softmax(dim=-1)[:,args.target_class].log()
             mr_att = cls.mean(dim=0)
 #
             #  loss_att = w_attack * CE_loss(mr_att, c)
-            loss_att = w_attack * NLL_loss(logit_att, c)
+            loss_att = w_attack * (-logit_att).mean()   #w_attack * NLL_loss(logit_att, c)
             mr_loss = 0.0
             if args.w_mr != 0:
                 mr_loss = args.w_mr * ( - mr_att[range(x_fake.size(0)),c].mean() )
@@ -410,14 +402,14 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             tepoch.set_description(f'Ep {epoch}: L_D: {Loss_d.avg:2.3f}, L_G: {Loss_g.avg:2.3f}, L_Q: {Loss_q.avg:2.3f}, lr: {scheduler_d.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}, MR: {Max_act.avg:2.1f}')
         # (5) After end of epoch, save result model
         if epoch % args.eval_every == args.eval_every - 1 or epoch==0:
-            _, images = evaluate(wandb, args, classifier_val, G, D, fixed_z=fixed_z, fixed_c = fixed_c, epoch = epoch)
+            _, images = evaluate(wandb, args, classifier_val, G, D, fixed_z=fixed_z, epoch = epoch)
             model_to_save_g = G.module if hasattr(G, 'module') else G
             model_to_save_d = D.module if hasattr(D, 'module') else D
             ckpt = {
                     'model_g' : model_to_save_g.state_dict(),
                     'model_d' : model_to_save_d.state_dict(),
                     }
-            save_ckpt(checkpoint_fpath = args.ckpt_dir + f'/PMI/{args.target_dataset}_{args.patch_size}', checkpoint = ckpt, is_best=True)
+            save_ckpt(checkpoint_fpath = args.ckpt_dir + f'/PMI/{args.target_dataset}', checkpoint = ckpt, is_best=True)
             if args.wandb_active:
                 wandb.log({
                     "loss_D" : Loss_d.avg,
@@ -438,17 +430,11 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
     #  test(wandb, args, classifier_val, G)
 
 
-def evaluate(wandb, args, classifier, G, D, fixed_z=None, fixed_c = None, epoch = 0):
+def evaluate(wandb, args, classifier, G, D, fixed_z=None, epoch = 0):
     G.eval()
-    if fixed_c == None and fixed_z == None:
-        fixed_c = torch.randint(0, args.target_classes, (args.test_batch_size,)).to(args.device) 
-        #  torch.Long(
-        #          args.test_batch_size,
-        #          ).fill_(args.target_class).to(args.device)
+    if fixed_z == None:
         fixed_z, _ = sample_noise(
                 n_disc=args.n_disc,
-                n_classes=args.target_classes,
-                class_ind = fixed_c,
                 n_cont=args.n_cont,
                 n_z = args.latent_size,
                 batch_size=args.test_batch_size,
@@ -457,11 +443,11 @@ def evaluate(wandb, args, classifier, G, D, fixed_z=None, fixed_c = None, epoch 
     val_acc = 0 
     x_fake = G(fixed_z)
     pred = classifier( x_fake)
-    val_acc = (pred.max(1)[1] == fixed_c).float().mean().item()
+    val_acc = (pred.max(1)[1] == args.target_class).float().mean().item()
     #  arg_sort = (torch.log(D(x_fake)[:,0] + 1e-8) + args.w_attack*torch.log(pred.softmax(dim=1)[:, fixed_c[0]])).argsort(descending=True)
     #  x_fake = x_fake[arg_sort, ...]
     x_fake = x_fake.reshape(
-            args.test_batch_size//args.target_classes, args.target_classes,
+            args.test_batch_size//args.visualize_nrow, args.visualize_nrow,
             args.num_channel, args.img_size, args.img_size)
     if args.num_channel == 1:
         x_fake = F.pad(x_fake, (1,1,1,1), value=1)
@@ -473,110 +459,6 @@ def evaluate(wandb, args, classifier, G, D, fixed_z=None, fixed_c = None, epoch 
     images = wandb.Image(image_array, caption=f'Epoch: {epoch}, Acc: {val_acc*100:2.2f}')
     return val_acc, images
 
-def test(wandb, args, classifier_val, G):
-    from torchmetrics.image.fid import FrechetInceptionDistance
-    from torchmetrics import StructuralSimilarityIndexMeasure
-    #  from sentence_transformers import SentenceTransformer, util
-    #  model = SentenceTransformer('clip-ViT-B-32', device = args.device)
-    #  import torchvision.transforms as T
-    #  from PIL import Image
-    #  transform = T.ToPILImage()
-    G.eval()
-    Acc_val = AverageMeter() 
-    Acc_val_total = []
-    Top5_val = AverageMeter()
-    Top5_val_total = []
-    Conf_val = AverageMeter()
-    Conf_val_total = []
-    SSIM_val = AverageMeter()
-    SSIM_val_total = []
-    #  CLIP_val = AverageMeter()
-    #  CLIP_val_total = []
-    FID_val = AverageMeter()
-    FID_val_total = []
-    target_dataset, _, _ = get_data_loader(args, args.target_dataset, class_wise = True)
-    for class_ind in range(args.target_classes):
-        dataset = target_dataset[class_ind]
-        pbar = tqdm(enumerate(dataset), total=len(dataset))
-        fid = FrechetInceptionDistance(feature=64, compute_on_cpu = True).to(args.device)
-        ssim = StructuralSimilarityIndexMeasure(data_range=1.0, channel = args.num_channel, compute_on_gpu=True).to(args.device)
-        for batch_idx, (x, y) in pbar:
-            fixed_c = torch.LongTensor(
-                    y.shape[0],
-                    ).fill_(class_ind).to(args.device)
-            fixed_z = sample_noise(
-                    n_disc=args.n_disc,
-                    n_classes=args.target_classes,
-                    class_ind = fixed_c,
-                    n_cont=args.n_cont,
-                    n_z = args.latent_size,
-                    batch_size=y.shape[0],
-                    device=args.device,
-                    )
-            label = y.to(args.device)
-            fake = G(fixed_z)
-            fake = fake.detach()
-            x = x.to(args.device)
-            pred_val = classifier_val(fake)
-            pred_val = pred_val.detach()
-            x_int  = (255 * (x+1)/2).type(torch.uint8)
-            fake_int  = (255 * (fake+1)/2).type(torch.uint8)
-            if args.num_channel == 1:
-                x_int = x_int.repeat(1,3,1,1)
-                fake_int = fake_int.repeat(1,3,1,1)
-            fid.update(x_int, real = True)
-            fid.update(fake_int, real = False)
-            top1, top5 = accuracy(pred_val, label, topk=(1, 5))
-            Acc_val.update(top1.item(), x.shape[0])
-            Top5_val.update(top5.item(), x.shape[0])
-            sftm = pred_val.softmax(dim=1)
-            Conf_val.update(sftm[:, class_ind].mean().item(), x.shape[0] )
-            #  clip_list = []
-            #  for i in range(x.shape[0]):
-            #      lists = [transform((x[i,:,:,:]+1)/2), transform((fake[i,:,:,:]+1)/2)]
-            #      encoded = model.encode(lists, batch_size=128, convert_to_tensor=True)
-            #      score = util.paraphrase_mining_embeddings(encoded)
-            #      clip_list.append(score[0][0])
-            #  CLIP_val.update(np.mean(clip_list), x.shape[0])
-            ssim_list = []
-            for i in range(x.shape[0]):
-                ssim_score =ssim( (x[i:i+1,:,:,:]+1)/2, (fake[i:i+1,:,:,:]+1)/2)
-                ssim_list.append(ssim_score.item())
-            SSIM_val.update(np.mean(ssim_list), x.shape[0])
-        fid_score = fid.compute()
-        fid.reset()
-        Acc_val_total.append(Acc_val.avg) 
-        Conf_val_total.append(Conf_val.avg)
-        SSIM_val_total.append(SSIM_val.avg)
-        #  CLIP_val_total.append(CLIP_val.avg)
-        FID_val_total.append(fid_score.item())
-        Top5_val_total.append(Top5_val.avg)
-
-        print(
-            f'==> Testing model.. target class: {class_ind}\n'
-            f'    Acc: {Acc_val.avg}\n'
-            f'    Top5: {Top5_val.avg}\n'
-            f'    Conf: {Conf_val.avg}\n'
-            f'    SSIM score : {SSIM_val.avg}\n'
-            #  f'    CLIP score : {CLIP_val.avg}\n'
-            f'    FID score : {fid_score}\n'
-            )
-        Acc_val.reset()
-        Conf_val.reset()
-        #  CLIP_val.reset()
-        SSIM_val.reset()
-        FID_val.reset()
-        Top5_val.reset()
-    print(
-        f'==> Overall Results\n'
-        f'    Acc: {np.mean(Acc_val_total)}\n'
-        f'    Conf: {np.mean(Conf_val_total)}\n'
-        #  f'    CLIP score : {np.mean(CLIP_val_total)}\n'
-        f'    SSIM score : {np.mean(SSIM_val_total)}\n'
-        f'    FID score : {np.mean(FID_val_total)}\n'
-        )
-
-
 
 def main():
     args = para_config()
@@ -584,7 +466,7 @@ def main():
         wandb.init(project = args.wandb_project,
                    entity = args.wandb_id,
                    config = args,
-                   name = f'{args.target_dataset}_P{args.patch_size}, S{args.patch_stride}, w_att:{args.w_attack}, n_df:{args.n_df}, lr:{args.lr}, GAN_smooth: {args.gan_labelsmooth}, w_mr: {args.w_mr}',
+                   name = f'{args.target_dataset} w_att:{args.w_attack}, lr:{args.lr}, Patch_size: {args.patch_size}, stride: {args.patch_stride}, padding: {args.patch_padding}',
                    group = f'{args.target_dataset}'
                    )
     else:
@@ -598,8 +480,8 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     
     if args.img_size == 32:
-        from models.resnet import resnet10 as resnet
-        from models.resnet_32x32 import resnet50 as resnet_val
+        from models.resnet import resnet18 as resnet
+        from models.resnet import resnet50 as resnet_val
     else:
         from models.resnet import resnet34 as resnet
         from models.resnet import resnet50 as resnet_val
@@ -620,14 +502,16 @@ def main():
             n_c = args.num_channel,
             n_disc= args.n_disc,
             n_cont = args.n_cont,
-            num_classes = args.target_classes,
             ).to(args.device)
     print(G)
     D = Discriminator(
             img_size = args.img_size,
             patch_size = args.patch_size,
-            patch_stride= args.patch_stride,
+            patch_stride = args.patch_stride,
             patch_padding = args.patch_padding,
+            #  scale_factor = args.scale_factor,
+            #  kernel_size = args.d_ksize,
+            levels= args.level_d,
             n_df = args.n_df,
             n_c = args.num_channel,
             ).to(args.device)
@@ -638,7 +522,6 @@ def main():
             levels = args.level_q,
             n_c = args.num_channel,
             n_disc= args.n_disc,
-            n_classes = args.target_classes,
             n_cont = args.n_cont,
             ).to(args.device)
     print(Q)
@@ -661,7 +544,7 @@ def main():
         raise Exception('there is no generative checkpoint')
     # Load target classifier 
     if args.test:
-        ckpt = load_ckpt(args.ckpt_dir + f'/PMI/{args.target_dataset}_{args.patch_size}', is_best = args.test)
+        ckpt = load_ckpt(args.ckpt_dir + f'/PMI/{args.target_dataset}', is_best = args.test)
         G.load_state_dict(ckpt['model_g'])
         D.load_state_dict(ckpt['model_d'])
 

@@ -10,7 +10,9 @@ from tqdm import tqdm
 import numpy as np
 from einops import rearrange
 import wandb
-import torch.nn.functional as F 
+import torch.nn.functional as F
+from torchvision.models import densenet, inception, resnet
+
 """ ==========END================"""
 
 
@@ -86,7 +88,7 @@ def parse_args():
     args = parser.parse_args()
     #-----------------set image configurations
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if args.dataset in ['mnist', 'fashionmnist', 'kmnist']:
+    if args.dataset in ['mnist', 'fashion', 'kmnist']:
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 10
@@ -108,14 +110,14 @@ def parse_args():
         args.num_classes = 10
     if args.dataset == 'celeba':
         args.num_channel = 3
-        args.img_size = 64
+        args.img_size = 224
         args.num_classes = 1000
     return args
 
 def train(wandb, args, model):
     ## Setting 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=0,betas=(0.9, 0.999))
     train_loader, test_loader, _ = get_data_loader(args=args)
     if args.decay_type == "cosine":
         scheduler = WarmupCosineSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
@@ -246,26 +248,30 @@ def main():
     
     if args.img_size == 32:    
         if args.valid:
-            #  from models.resnet_32x32 import resnet50 as resnet
-            from models.resnet import resnet50 as resnet
+            model = resnet.resnet34(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True)
             set_random_seeds(random_seed = 7)
+            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
         else:
-            #  from models.resnet_32x32 import resnet10 as resnet
-            from models.resnet import resnet10 as resnet
+            model = resnet.resnet18(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True)
             set_random_seeds(random_seed = 0)
+            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
     else:
         if args.valid:
-            from models.resnet import resnet50 as resnet
+            model = inception.inception_v3(
+                    pretrained=True,
+                    aux_logits=True,
+                    init_weights=True)
+            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
             set_random_seeds(random_seed = 7)
         else:
-            from models.resnet import resnet34 as resnet
+            torch.hub.list('zhanghang1989/ResNeSt', force_reload=True)
+            model = torch.hub.load('zhanghang1989/ResNeSt', 'resnest101', pretrained=True)
+            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
             set_random_seeds(random_seed = 0)
-
 
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    model = resnet(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True if args.img_size == 64 and args.valid else False)
     # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(args.device)
     if args.resume :

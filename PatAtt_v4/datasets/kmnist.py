@@ -12,14 +12,14 @@ import numpy as np
 
 def get_loader_kmnist(args, class_wise=False):
     train_transform = transforms.Compose([
-        transforms.Resize((30,30)),
-        transforms.Pad(1),
+        transforms.Resize((32,32)),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.5),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,)),
     ])
     test_transform = transforms.Compose([
-        transforms.Resize((30,30)),
-        transforms.Pad(1),
+        transforms.Resize((32,32)),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,)),
     ])

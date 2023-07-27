@@ -57,16 +57,20 @@ class Cutout(object):
 
 def get_loader_celeba(args, class_wise=False):
     transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.CenterCrop(128),
-        transforms.Resize(64),
+        transforms.RandomResizedCrop(224, scale=(0.85, 1.0), ratio=(1.0,1.0)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1),
+        #  transforms.RandomHorizontalFlip(p=0.5),
+        #  transforms.CenterCrop(128),
+        #  transforms.Resize(64),
         transforms.ToTensor(),
-        Cutout(n_holes=3, length=16),
+        #  Cutout(n_holes=3, length=16),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
     ])
     transform_test = transforms.Compose([
-        transforms.CenterCrop(128),
-        transforms.Resize(64),
+        #  transforms.RandomResizedCrop(224, scale=(0.85, 1.0), ratio=(1.0,1.0)),
+        #  transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1),
+        #  transforms.CenterCrop(128),
+        transforms.Resize(224),
         transforms.ToTensor(),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
     ])
@@ -125,7 +129,7 @@ def get_loader_celeba(args, class_wise=False):
         return loaders, 0, 0
     else:
         n_total = len(dataset_train)
-        n_target = int(n_total * 0.8)
+        n_target = int(n_total * 0.9)
         #  n_val = n_total - n_target
         mask = torch.zeros(n_total).bool()
         mask_ind = torch.randperm(n_total)[:n_target]

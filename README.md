@@ -7,7 +7,7 @@
 If you don't have anaconda3, you can install by executing the below bash commands
 ```bash
 wget https://repo.anaconda.com/archive/Anaconda3-2021.05-Linux-x86_64.sh
-bash <path/to/Anaconda3-2021.05-Linux-x86_64.sh> -b -p 
+bash ~/Desktop/<anacondafile> -b -p 
 source anaconda3/bin/activate
 ```
 
@@ -18,6 +18,7 @@ conda activate torch
 conda install pytorch==1.12.0 torchvision==0.13.0 -c pytorch
 pip install tqdm easydict wandb imageio tqdm einops torch-fidelity albumentations sentence_transformers
 python setup.py develop
+pip install -U git+https://github.com/facebookresearch/fvcore.git
 <!-- conda install -c conda-forge torchmetrics -->
 ```
 
@@ -28,8 +29,8 @@ python setup.py develop
 1. Train target/validation classifier 
 
 ```bash
-python classifier/classifier.py --dataset=emnist --train-batch-size=256 --epochs=30
-python classifier/classifier.py --dataset=emnist --train-batch-size=256 --epochs=30 --valid=True
+python classifier/classifier.py --dataset=emnist --train-batch-size=256 --epochs=30 --lr=3e-2
+python classifier/classifier.py --dataset=emnist --train-batch-size=256 --epochs=30 --lr=3e-2 --valid=True
 python classifier/classifier.py --dataset=emnist --train-batch-size=256 --test=True
 ```
 2. Train Common Generator
@@ -40,7 +41,7 @@ python otherMIAs/common_GAN.py --levels=2 --latent-size=64 --dataset=mnist --tra
 
 3. Run MIAs
 
-```bash
+a``bash
 python otherMIAs/general_MI.py --target-dataset=emnist --epochs=50 --lr=3e-3 # General MI
 python otherMIAs/generative_MI.py --levels=2 --target-dataset=emnist --aux-dataset=mnist --epochs=400 --lr=3e-2 --random-seed={x} # GenerativeMI
 python otherMIAs/VMI.py --lr=2e-4 # Variational MI
