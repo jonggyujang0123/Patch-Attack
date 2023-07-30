@@ -114,12 +114,14 @@ class Mixup(nn.Module):
             ):
         super(Mixup, self).__init__()
         self.alpha = alpha
-    def forward(self, x):
+    
+    def forward(self, x, y):
         lam = np.random.beta(self.alpha, self.alpha)
         batch_size = x.size()[0]
         index = torch.randperm(batch_size).to(x.device)
-        mixed_x = lam * x + (1 - lam) * x[index, ...]
-        return mixed_x
+        mixed_x = lam * x + (1 - lam) * x[index, :]
+        y_a, y_b = y, y[index]
+        return mixed_x, y_a, y_b, lam
 
     def __repr__(self):
         return self.__class__.__name__ + '(alpha={})'.format(self.alpha)
@@ -157,7 +159,8 @@ class CutMix(nn.Module):
         bbx1, bby1, bbx2, bby2 = self.rand_bbox(x.size(), lam)
         mask = torch.zeros_like(x).to(x.device)
         mask[:, :, bbx1:bbx2, bby1:bby2] = 1
-        x = x * mask + x[index, ...] * (1 - mask)
+        x = x * (1-mask) + x[index, ...] * mask
+        lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))
         return x, y, y[index], lam
 
 class PixelNorm(nn.Module):
@@ -219,8 +222,10 @@ def get_ssim():
 
 def get_data_loader(args, dataset_name = None, class_wise=False):
     dataset_name = args.dataset if dataset_name is None else dataset_name
-    if dataset_name in ['cifar100', 'cifar10']:
-        from datasets.cifar import get_loader_cifar as get_loader
+    if dataset_name in ['cifar10']:
+        from datasets.cifar10 import get_loader_cifar10 as get_loader
+    if dataset_name in ['cifar100']:
+        from datasets.cifar100 import get_loader_cifar100 as get_loader
     if dataset_name in ['mnist']:
         from datasets.mnist import get_loader_mnist as get_loader
     if dataset_name in ['emnist']:
@@ -235,6 +240,10 @@ def get_data_loader(args, dataset_name = None, class_wise=False):
         from datasets.LFW import get_loader_LFW as get_loader
     if dataset_name == 'HAN':
         from datasets.HAN import get_loader_HAN as get_loader
+    if dataset_name == 'caltech101':
+        from datasets.caltech101 import get_loader_caltech101 as get_loader
+    if dataset_name == 'caltech256':
+        from datasets.caltech256 import get_loader_caltech256 as get_loader
     return get_loader(args, class_wise= class_wise)
 
 

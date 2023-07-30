@@ -10,26 +10,12 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 from torchvision import transforms
 import argparse
-
-def initialize_weights(net):
-    for m in net.modules():
-        if isinstance(m, nn.Conv2d):
-            m.weight.data.normal_(0, 0.02)
-            m.bias.data.zero_()
-        elif isinstance(m, nn.ConvTranspose2d):
-            m.weight.data.normal_(0, 0.02)
-            m.bias.data.zero_()
-        elif isinstance(m, nn.Linear):
-            m.weight.data.normal_(0, 0.02)
-            m.bias.data.zero_()
-        elif isinstance(m, nn.BatchNorm2d):
-            m.weight.data.normal_(1.0, 0.02)
-            m.bias.data.zero_()
+import torch.nn.functional as F
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch GAN')
     parser.add_argument('--dataset', 
-                        default='emnist', 
+                        default='HAN', 
                         type=str)
     parser.add_argument('--ckpt-path',
                         default='../experiments/common_gan',
@@ -58,6 +44,9 @@ def parse_args():
     parser.add_argument('--latent-size',
                         default=128,
                         type=int)
+    parser.add_argument('--log-interval',
+                        default=10,
+                        type=int)
     parser.add_argument('--n-gf',
                         default=64,
                         type=int)
@@ -74,10 +63,7 @@ def parse_args():
                         default=100,
                         type=int)
     parser.add_argument('--num-workers',
-                        default=4,
-                        type=int)
-    parser.add_argument('--log-interval',
-                        default=10,
+                        default=8,
                         type=int)
     parser.add_argument('--pin-memory',
                         default=True,
@@ -91,9 +77,6 @@ def parse_args():
     parser.add_argument('--wandb-id',
                         default='jonggyujang0123',
                         type=str)
-    parser.add_argument('--local_rank',
-                        default=-1,
-                        type=int)
 
 
     args = parser.parse_args()
@@ -102,33 +85,28 @@ def parse_args():
     args.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     args.ckpt_fpath = os.path.join(args.ckpt_path, args.dataset)
 
-    if args.dataset in ['mnist', 'fashionmnist', 'kmnist']:
+    if args.dataset in 'HAN':
         args.num_channel = 1
         args.img_size = 32
-        args.num_classes = 10
-    if args.dataset == 'emnist':
-        args.num_channel = 1
-        args.img_size = 32
-        args.num_classes = 26
-    if args.dataset == 'cifar10':
-        args.num_channel = 3
-        args.img_size = 32
-        args.num_classes = 10
     if args.dataset == 'cifar100':
         args.num_channel = 3
         args.img_size = 32
-        args.num_classes = 100
-    if args.dataset == 'LFW':
-        args.num_channel = 3
-        args.img_size = 64
-        args.num_classes = 10
-    if args.dataset == 'celeba':
-        args.num_channel = 3
-        args.img_size = 64
-        args.num_classes = 1000
-
-
     return args
+
+def initialize_weights(net):
+    for m in net.modules():
+        if isinstance(m, nn.Conv2d):
+            m.weight.data.normal_(0, 0.02)
+            #  m.bias.data.zero_()
+        elif isinstance(m, nn.ConvTranspose2d):
+            m.weight.data.normal_(0, 0.02)
+            #  m.bias.data.zero_()
+        elif isinstance(m, nn.Linear):
+            m.weight.data.normal_(0, 0.02)
+            m.bias.data.zero_()
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.normal_(1.0, 0.02)
+            m.bias.data.zero_()
 
 class Generator(nn.Module):
     def __init__(self,
@@ -146,40 +124,41 @@ class Generator(nn.Module):
         self.n_c = n_c
 
         self.init_size = self.img_size // 2**levels
-        self.main = nn.Sequential(
+
+        self.init_block = nn.Sequential(
                 Rearrange('b c -> b c () ()'),
                 nn.ConvTranspose2d(self.latent_size, self.n_gf * 2**levels, self.init_size, 1, 0),
-                nn.BatchNorm2d(self.n_gf * 2**levels),
-                nn.ReLU(True),
+                nn.LeakyReLU(0.2, inplace=True),
                 )
-                #  nn.Linear(self.latent_size, 1024),
-                #  nn.BatchNorm1d(1024),
-                #  nn.LeakyReLU(0.2, inplace=True),
-                #  #  nn.ReLU(True),
-                #  nn.Linear(1024, self.n_gf * 2**levels * self.init_size**2),
-                #  nn.BatchNorm1d(self.n_gf * 2**levels * self.init_size**2),
-                #  nn.LeakyReLU(0.2, inplace=True),
-                #  #  nn.ReLU(True),
-                #  Rearrange('b (c h w) -> b c h w', h=self.init_size, w=self.init_size),
-                #  )
-        self.dconv = nn.Sequential()
+        self.deconv = nn.Sequential()
         for i in range(levels):
-            self.dconv.append(
-                    nn.ConvTranspose2d(
-                        self.n_gf * 2**(levels-i),
-                        self.n_gf * 2**(levels-i-1) if i != levels-1 else self.n_c,
-                        4, 2, 1))
-            if i != levels-1:
-                self.dconv.append(nn.BatchNorm2d(self.n_gf * 2**(levels-i-1)))
-                #  self.dconv.append(nn.LeakyReLU(0.2, inplace=True))
-                self.dconv.append(nn.ReLU(True))
-            else:
-                self.dconv.append(nn.Tanh())
-        initialize_weights(self)
+            self.deconv.add_module(
+                    'deconv_{}'.format(i),
+                    nn.Sequential(
+                        nn.ConvTranspose2d(
+                            self.n_gf * 2**(levels-i),
+                            self.n_gf * 2**(levels-i-1) if i < levels-1 else self.n_c,
+                            4, 2, 1, bias=False
+                            ),
+                        nn.BatchNorm2d(self.n_gf * 2**(levels-i-1)) if i < levels-1 else nn.Identity(),
+                        nn.LeakyReLU(0.2, inplace=True) if i < levels-1 else nn.Tanh(),
+                        )
+                    )
+        self.apply(initialize_weights)
+        #  initialize_weights(self)
     def forward(self, x):
-        x = self.main(x)
-        x = self.dconv(x)
+        x = self.init_block(x)
+        x = self.deconv(x)
         return x
+
+def discriminator_block(in_filters, out_filters, bn=True):
+    block = [
+            nn.Conv2d(in_filters, out_filters, 3, 2, 1), 
+            nn.LeakyReLU(0.2, inplace=True), 
+            ]
+    if bn:
+        block.append(nn.BatchNorm2d(out_filters))
+    return block
 
 class Discriminator(nn.Module):
     def __init__(
@@ -194,35 +173,32 @@ class Discriminator(nn.Module):
         self.n_df = n_df
         self.n_c = n_c
         self.levels = levels
-        self.main = nn.Sequential()
+        
+        self.conv = nn.Sequential()
         for i in range(levels):
-            self.main.append(
-                    nn.Conv2d(
+            self.conv.add_module(
+                f'conv_{i}',
+                nn.Sequential(
+                    *discriminator_block(
                         self.n_c if i == 0 else self.n_df * 2**(i-1),
                         self.n_df * 2**i,
-                        4, 2, 1))
-            if i != 0:
-                self.main.append(nn.BatchNorm2d(self.n_df * 2**i))
-            self.main.append(nn.LeakyReLU(0.2, inplace=True))
-            #  self.main.append(nn.Dropout2d(0.2))
-        self.fc = nn.Sequential(
-                nn.Conv2d(self.n_df * 2**(levels-1), 1, self.img_size // 2**levels, 1, 0),
-                Rearrange('b c h w -> b (c h w)'),
-                #  nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1),
-                nn.Sigmoid(),
-                #  nn.Linear(self.n_df * 2**(levels-1) * (self.img_size // 2**levels)**2, 1024),
-                #  nn.BatchNorm1d(1024),
-                #  nn.LeakyReLU(0.2, inplace=True),
-                #  nn.Linear(1024, 1),
-                #  nn.Sigmoid(),
+                        bn = False if i == 0 else True,
+                        ),
+                    )
                 )
-        initialize_weights(self)
-    def forward(self, x):
-        x = self.main(x)
-        #  x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
 
+        n_feat = self.conv(torch.zeros(1, self.n_c, self.img_size, self.img_size)).shape[2]
+
+        self.fc = nn.Sequential(
+                Rearrange('b c h w -> b (c h w)'),
+                nn.Linear(n_feat**2 * n_df * 2**(levels-1), 1),
+                nn.Sigmoid(),
+                )
+        self.apply(initialize_weights)
+        #  initialize_weights(self)
+    def forward(self, x):
+        x = self.conv(x)
+        return self.fc(x)
 
 
 def train(wandb, args, G, D):
@@ -231,12 +207,6 @@ def train(wandb, args, G, D):
     optimizer_G = optim.Adam(G.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
     optimizer_D = optim.Adam(D.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
     train_loader, _, _ = get_data_loader(args=args)
-    if args.decay_type == 'cosine':
-        scheduler_G = WarmupCosineSchedule(optimizer_G, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
-        scheduler_D = WarmupCosineSchedule(optimizer_D, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
-    else:
-        scheduler_G = WarmupLinearSchedule(optimizer_G, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
-        scheduler_D = WarmupLinearSchedule(optimizer_D, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
     Loss_g = AverageMeter()
     Loss_d = AverageMeter()
     D_x_total = AverageMeter()
@@ -280,9 +250,6 @@ def train(wandb, args, G, D):
             Loss_d.update(d_loss.item(), b_size)
             D_x_total.update(D_x, b_size)
             D_G_z_total.update(D_G_z, b_size)
-            # Update scheduler
-            scheduler_G.step()
-            scheduler_D.step()
 
             tepoch.set_description(
                     f'Epoch [{epoch+1}/{args.epochs}] '
@@ -290,7 +257,7 @@ def train(wandb, args, G, D):
                     f'Loss_g: {Loss_g.val:.4f}, '
                     f'D(x): {D_x_total.val:.4f}, '
                     f'D(G(z)): {D_G_z_total.val:.4f},'
-                    f'Lr : {scheduler_G.get_lr()[0]:.4f}'
+                    f'Lr : {args.lr:.4f}'
                     )
             tepoch.refresh()
         Loss_g.reset()
@@ -302,6 +269,10 @@ def train(wandb, args, G, D):
             G.eval()
             test_img = G(fixed_noise)
             test_img = test_img.reshape(10, 10, args.num_channel,args.img_size,args.img_size)
+            if args.num_channel == 1:
+                test_img = F.pad(test_img, (1,1,1,1), value=1)
+            else:
+                test_img = F.pad(test_img, (1,1,1,1), value=-1)
             image_grid = rearrange(test_img,
                                    'b1 b2 c h w -> (b1 h) (b2 w) c').cpu().detach().numpy().astype(np.float64)
             image_grid = wandb.Image(image_grid, caption=f'Epoch {epoch+1}')

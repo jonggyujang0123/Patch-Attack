@@ -1,7 +1,7 @@
 """========Default import===="""
 from __future__ import print_function
 import argparse
-from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, save_ckpt, load_ckpt, get_data_loader, accuracy
+from utils.base_utils import set_random_seeds, get_accuracy, AverageMeter, WarmupCosineSchedule, WarmupLinearSchedule, save_ckpt, load_ckpt, get_data_loader, accuracy, CutMix
 import torch.nn as nn
 import torch
 import os
@@ -11,7 +11,7 @@ import numpy as np
 from einops import rearrange
 import wandb
 import torch.nn.functional as F
-from torchvision.models import densenet, inception, resnet
+from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 
 """ ==========END================"""
 
@@ -21,14 +21,6 @@ from torchvision.models import densenet, inception, resnet
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
     #----------Default Optimizer
-    parser.add_argument("--resume",
-            type=bool,
-            default= False,
-            help="Resume the last training from saved checkpoint.")
-    parser.add_argument("--test", 
-            type=bool,
-            default = False,
-            help="if test, choose True.")
     parser.add_argument("--pin-memory", 
             type=bool,
             default = True)
@@ -44,9 +36,18 @@ def parse_args():
     parser.add_argument("--lr",
             type=float,
             default= 1e-1)
-    parser.add_argument("--valid",
-            type=bool,
-            default = False)
+    parser.add_argument("--val",
+            action=argparse.BooleanOptionalAction,
+            default=False)
+    parser.add_argument("--eval",
+            action=argparse.BooleanOptionalAction,
+            default=False)
+    parser.add_argument("--browse",
+            action=argparse.BooleanOptionalAction,
+            default=False)
+    parser.add_argument("--cutmix",
+            action=argparse.BooleanOptionalAction,
+            default=False)
     parser.add_argument("--warmup-steps",
             type=int,
             default = 100)
@@ -84,11 +85,10 @@ def parse_args():
     parser.add_argument("--wandb-active",
             type=bool,
             default=True)
-
     args = parser.parse_args()
     #-----------------set image configurations
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if args.dataset in ['mnist', 'fashion', 'kmnist']:
+    if args.dataset == 'mnist':
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 10
@@ -96,44 +96,31 @@ def parse_args():
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 26
-    if args.dataset == 'cifar10':
+    if args.dataset in ['cifar10','caltech101']:
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
-    if args.dataset == 'cifar100':
-        args.num_channel = 3
-        args.img_size = 32
-        args.num_classes = 100
-    if args.dataset == 'LFW':
-        args.num_channel = 3
-        args.img_size = 64
-        args.num_classes = 10
-    if args.dataset == 'celeba':
-        args.num_channel = 3
-        args.img_size = 224
-        args.num_classes = 1000
     return args
+
+
 
 def train(wandb, args, model):
     ## Setting 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=0,betas=(0.9, 0.999))
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
     train_loader, test_loader, _ = get_data_loader(args=args)
-    if args.decay_type == "cosine":
-        scheduler = WarmupCosineSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
-    else:
-        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.epochs*len(train_loader))
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(args.epochs*0.5), int(args.epochs*0.75), int(args.epochs*0.9)], gamma=0.1)
     val_acc = .0; best_acc = .0; start_epoch =0
     AvgLoss = AverageMeter()
     # We only save the model who uses device "cuda:0"
-    # To resume the device for the save model woule be also "cuda:0"
-    if args.resume:
-        ckpt = load_ckpt(args.ckpt_fpath)
-        optimizer.load_state_dict(ckpt['optimizer'])
-        scheduler.load_state_dict(ckpt['scheduler'])
-        start_epoch = ckpt['epoch']+1
 
-
+    cutmix = CutMix(alpha=1.0)
+    #  cutmix = Mixup(alpha=1.0)
+    if args.cutmix:
+        cutmix_prob = 0.5
+    else:
+        cutmix_prob = 0.0
+    
     # Prepare dataset and dataloader
     for epoch in range(start_epoch, args.epochs):
 #        if args.local_rank not in [-1,1]:
@@ -144,14 +131,19 @@ def train(wandb, args, model):
         for batch, data in enumerate(tepoch):
             optimizer.zero_grad()
             inputs, labels = data[0].to(args.device), data[1].to(args.device)
-            outputs = model(inputs)
-            loss =criterion(outputs, labels)
+            if args.cutmix and np.random.rand() < cutmix_prob:
+                inputs, labela, labelb, lam = cutmix(inputs, labels)
+                output = model(inputs)
+                loss = criterion(output, labela) * lam + criterion(output, labelb) * (1. - lam)
+            else:
+                outputs = model(inputs)
+                loss =criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            scheduler.step()
             AvgLoss.update(loss.item(), n =len(data))
             tepoch.set_description(f'Epoch {epoch}: train_loss: {AvgLoss.avg:2.2f}, lr : {scheduler.get_lr()[0]:.2E}')
 
+        scheduler.step()
         # save and evaluate model routinely.
         if epoch % args.interval_val == 0:
             val_acc, top5_acc = evaluate(args, model=model, device=args.device, val_loader=test_loader)
@@ -202,7 +194,7 @@ def evaluate(args, model, val_loader, device):
 
     return acc_t1.avg, acc_t5.avg
 
-def test(wandb, args):
+def browse(wandb, args):
     train_loader, _, _ = get_data_loader(args=args, class_wise=True)
     images = []
     for classes in range(10):
@@ -211,11 +203,11 @@ def test(wandb, args):
         for k, (image, idx) in enumerate(loader):
             if k > 0:
                 continue
-            images.append(image[0:4, :, :, :])
+            images.append(image[0:10, :, :, :])
 
     images = torch.cat(images, dim=0)
     images = F.pad(images, pad = (1, 1, 1, 1), value=-1)
-    images = rearrange(images, '(b1 b2) c h w -> (b2 h) (b1 w) c', b1=10, b2=4).numpy().astype(np.float64)
+    images = rearrange(images, '(b1 b2) c h w -> (b2 h) (b1 w) c', b1=10, b2=10).numpy().astype(np.float64)
     images = wandb.Image(images)
     wandb.log({"{args.dataset}": images})
     
@@ -225,7 +217,7 @@ def test(wandb, args):
 
 def main():
     args = parse_args()
-    if args.valid == True:
+    if args.val == True:
         args.ckpt_fpath = f"{args.ckpt_fpath}/{args.dataset}_valid"
     else:
         args.ckpt_fpath = f"{args.ckpt_fpath}/{args.dataset}"
@@ -245,44 +237,26 @@ def main():
     # We need to use seeds to make sure that model initialization same
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     args.device = torch.device("cuda:0")
+   
     
-    if args.img_size == 32:    
-        if args.valid:
-            model = resnet.resnet34(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True)
-            set_random_seeds(random_seed = 7)
-            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
-        else:
-            model = resnet.resnet18(num_classes=args.num_classes, num_channel= args.num_channel, pretrained = True)
-            set_random_seeds(random_seed = 0)
-            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
+    if args.val:
+        model = ResNet34(num_channel=args.num_channel, num_classes=args.num_classes)
+        set_random_seeds(random_seed = 0)
     else:
-        if args.valid:
-            model = inception.inception_v3(
-                    pretrained=True,
-                    aux_logits=True,
-                    init_weights=True)
-            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
-            set_random_seeds(random_seed = 7)
-        else:
-            torch.hub.list('zhanghang1989/ResNeSt', force_reload=True)
-            model = torch.hub.load('zhanghang1989/ResNeSt', 'resnest101', pretrained=True)
-            model.fc = nn.Linear(model.fc.in_features, args.num_classes)
-            set_random_seeds(random_seed = 0)
+        model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
+        set_random_seeds(random_seed = 7)
 
-    # torch.distributed.init_process_group(backend="gloo")
-
-    # Encapsulate the model on the GPU assigned to the current process
-    # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(args.device)
-    if args.resume :
-        ckpt = load_ckpt(args.ckpt_fpath, is_best = args.test)
-        model.load_state_dict(ckpt['model'])
-
+    print(model)
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'Number of trainable parameter is {pytorch_total_params:.2E}')
 
-    if args.test:
-        test(wandb, args)
+    if args.browse:
+        browse(wandb, args)
+    elif args.eval:
+        train_loader, val_loader, _ = get_data_loader(args=args)
+        val_acc, top5_acc = evaluate(args, model, val_loader, args.device)
+        print(f'Validation Acc: {val_acc:2.4f} | {top5_acc:2.4f}')
     else:
         train(wandb, args, model)
 

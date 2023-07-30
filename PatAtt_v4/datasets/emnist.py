@@ -15,8 +15,9 @@ def get_loader_emnist(args, class_wise = None):
     transform_train = transforms.Compose([
                                     lambda img: transforms.functional.rotate(img, -90),
                                     lambda img: transforms.functional.hflip(img),
-                                    transforms.RandomRotation(10),
-                                    transforms.RandomResizedCrop(32, scale=(0.9, 1.0), ratio=(1.0,1.0)),
+                                    #  transforms.RandomRotation(20),
+                                    #  transforms.Pad(4),
+                                    #  transforms.RandomResizedCrop(args.img_size, scale=(0.7, 1.0), ratio=(1.0,1.0)),
                                     transforms.Resize((args.img_size, args.img_size)),
                                     transforms.ToTensor(),
                                     transforms.Normalize((0.5,), (0.5,))])

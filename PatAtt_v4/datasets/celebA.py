@@ -13,51 +13,10 @@ import torch.nn.functional as F
 #  import albumentations as A
 #  from albumentations.pytorch import ToTensorV2
 
-class Cutout(object):
-    """Randomly mask out one or more patches from an image.
-
-    Args:
-        n_holes (int): Number of patches to cut out of each image.
-        length (int): The length (in pixels) of each square patch.
-    """
-    def __init__(self, n_holes, length):
-        self.n_holes = n_holes
-        self.length = length
-
-    def __call__(self, img):
-        """
-        Args:
-            img (Tensor): Tensor image of size (C, H, W).
-        Returns:
-            Tensor: Image with n_holes of dimension length x length cut out of it.
-        """
-        self.n_holes = np.random.randint(0, 4)
-        self.length = np.random.randint(6, 16)
-        h = img.size(1)
-        w = img.size(2)
-
-        mask = np.ones((h, w), np.float32)
-
-        for n in range(self.n_holes):
-            y = np.random.randint(h)
-            x = np.random.randint(w)
-
-            y1 = np.clip(y - self.length // 2, 0, h)
-            y2 = np.clip(y + self.length // 2, 0, h)
-            x1 = np.clip(x - self.length // 2, 0, w)
-            x2 = np.clip(x + self.length // 2, 0, w)
-
-            mask[y1: y2, x1: x2] = 0.
-
-        mask = torch.from_numpy(mask)
-        mask = mask.expand_as(img)
-        img = img * mask
-
-        return img
 
 def get_loader_celeba(args, class_wise=False):
     transform = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.85, 1.0), ratio=(1.0,1.0)),
+        transforms.RandomResizedCrop(224, scale=(0.85, 1.0), ratio=(0.9,1.1)),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1),
         #  transforms.RandomHorizontalFlip(p=0.5),
         #  transforms.CenterCrop(128),
@@ -157,62 +116,3 @@ def get_loader_celeba(args, class_wise=False):
 
 
 
-class CelebADataLoader:
-    def __init__(self, config):
-        self.config = config
-
-        if config.data_mode == "imgs":
-            transform = v_transforms.Compose(
-                [v_transforms.CenterCrop(64),
-                 v_transforms.ToTensor(),
-                 v_transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-
-            dataset = v_datasets.ImageFolder(self.config.data_folder, transform=transform)
-
-            self.dataset_len = len(dataset)
-
-            self.num_iterations = (self.dataset_len + config.batch_size - 1) // config.batch_size
-
-            self.loader = DataLoader(dataset,
-                                     batch_size=config.batch_size,
-                                     shuffle=True,
-                                     num_workers=config.data_loader_workers,
-                                     pin_memory=config.pin_memory)
-        elif config.data_mode == "numpy":
-            raise NotImplementedError("This mode is not implemented YET")
-        else:
-            raise Exception("Please specify in the json a specified mode in data_mode")
-
-    def plot_samples_per_epoch(self, fake_batch, epoch):
-        """
-        Plotting the fake batch
-        :param fake_batch: Tensor of shape (B,C,H,W)
-        :param epoch: the number of current epoch
-        :return: img_epoch: which will contain the image of this epoch
-        """
-        img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-        v_utils.save_image(fake_batch,
-                           img_epoch,
-                           nrow=4,
-                           padding=2,
-                           normalize=True)
-        return imageio.imread(img_epoch)
-
-    def make_gif(self, epochs):
-        """
-        Make a gif from a multiple images of epochs
-        :param epochs: num_epochs till now
-        :return:
-        """
-        gen_image_plots = []
-        for epoch in range(epochs + 1):
-            img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-            try:
-                gen_image_plots.append(imageio.imread(img_epoch))
-            except OSError as e:
-                pass
-
-        imageio.mimsave(self.config.out_dir + 'animation_epochs_{:d}.gif'.format(epochs), gen_image_plots, fps=2)
-
-    def finalize(self):
-        pass

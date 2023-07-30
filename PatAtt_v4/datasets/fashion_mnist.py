@@ -14,6 +14,7 @@ from torchvision import datasets, transforms
 def get_loader_fashion_mnist(args, class_wise = False):
     transform_train = transforms.Compose([
                                     transforms.Resize((32)),
+                                    transforms.horizontal_flip(p=0.5),
                                     transforms.ToTensor()])
     transform_val = transforms.Compose([
                                     transforms.Resize((32)),

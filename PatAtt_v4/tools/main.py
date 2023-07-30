@@ -14,6 +14,8 @@ from einops import rearrange
 import argparse
 import torchvision.transforms as transforms
 import itertools
+from torchvision.models import densenet, inception, resnet
+from models.resnet import resnet10, resnet18, resnet34, resnet50, resnet101
 def para_config():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
 
@@ -181,7 +183,7 @@ def para_config():
         args.num_classes = 26
     if args.target_dataset == 'cifar10':
         args.num_channel = 3
-        args.img_size = 32
+        args.img_size = 64
         args.num_classes = 10
     if args.target_dataset == 'cifar100':
         args.num_channel = 3
@@ -193,12 +195,9 @@ def para_config():
         args.num_classes = 10
     if args.target_dataset == 'celeba':
         args.num_channel = 3
-        args.img_size = 64
+        args.img_size = 224
         args.num_classes = 1000
 
-    if args.target_dataset in ['mnist', 'emnist']:
-        # ADD SOME ARGUMENTS
-        args.abc= 0.0
 
     return args
 
@@ -221,37 +220,32 @@ class AUGMENT_FWD(nn.Module):
                         fill=-1),
                     transforms.Resize(args.img_size),
                     )
+            self.iterations=8
         elif args.target_dataset in ['celeba', 'cinic10', 'cifar10', 'cifar100', 'LFW']:
             self.trans = torch.nn.Sequential(
-                    #  CutMix(),
-                    #  Mixup(),
-                    transforms.RandomResizedCrop(args.img_size, scale=(0.9, 1.0), ratio=(1.0, 1.0)),
-                    transforms.RandomHorizontalFlip(p=0.5),
-                    #  transforms.RandomAffine(
-                    #      degrees=0,
-                    #      translate=(0.05, 0.05),
-                    #      fill=0),
+                    transforms.RandomAffine(
+                        degrees=10,
+                        scale=(0.8, 1.2),
+                        fill=0),
                     #  Cutout(
                     #      n_holes=3,
-                    #      length=0.1,
+                    #      length=0.25,
                     #      fill=0,
                     #      ),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.RandomResizedCrop(args.img_size, scale=(0.75, 1.0), ratio=(1.0, 1.0)),
                     transforms.Resize(args.img_size),
-                    #  AddGaussianNoise(0.,0.3),
-                    #  transforms.RandomApply(
-                    #      [transforms.GaussianBlur(3, sigma=(0.1, 2.0))],
-                    #      p=1.0),
                     )
-        self.iterations=8
+            self.iterations=4
         print(self.trans)
 
     def forward(self, x):
         #  b, c, h, w = x.size()
-        x = [self.trans(x) for _ in range(self.iterations)]
-        #  x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
-        #  x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
-        x = torch.cat(x)
+        #  x = [self.trans(x) for _ in range(self.iterations)]
+        x = [x] + [self.trans(x) for _ in range(self.iterations-1)]
         #  x = torch.cat([x, x.view(self.iterations-1, b, c, h, w).mean(dim=0)])
+        x = torch.cat(x)
+        ## Results 
         #  x = self.classifier(torch.cat(x)).view(self.iterations, b, -1).mean(dim=0)
         #  x = model(torch.cat(x)).view(self.iterations, b, -1)
         #  x_mr = x.mean(dim=0)
@@ -357,14 +351,11 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             # (3) Update Qrator and Generator
             optimizer_info.zero_grad()
             x_fake_aug = aug(x_fake)
-            #  q = Q(x_fake_aug).view(aug.iterations, x_fake.size(0), -1)
-            #  q_mr = q.mean(dim=0)
             q = Q(x_fake).view(x_fake.size(0), -1)
-            q_mr = q
             #  logit_q = q.softmax(dim=-1).mean(dim=0).log()
             
-            logit_q = q_mr[:, :args.n_disc]
-            q_cont = q_mr[:, args.n_disc:]
+            logit_q = q[:, :args.n_disc]
+            q_cont = q[:, args.n_disc:]
 
             outputs= D(x_fake, real=False)
             err_g = GAN_loss(outputs , real_target)
@@ -380,14 +371,11 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
 #
             #  loss_att = w_attack * CE_loss(mr_att, c)
             loss_att = w_attack * (-logit_att).mean()   #w_attack * NLL_loss(logit_att, c)
-            mr_loss = 0.0
-            if args.w_mr != 0:
-                mr_loss = args.w_mr * ( - mr_att[range(x_fake.size(0)),c].mean() )
             
             if epoch < args.epoch_pretrain:
                 total_loss = err_g + q_loss
             else:
-                total_loss = err_g + loss_att + q_loss + mr_loss
+                total_loss = err_g + loss_att + q_loss 
             total_loss.backward()
             optimizer_info.step()
             scheduler_info.step()
@@ -480,20 +468,33 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     
     if args.img_size == 32:
-        from models.resnet import resnet18 as resnet
-        from models.resnet import resnet50 as resnet_val
+        from models.resnet import resnet18 as model
+        from models.resnet import resnet50 as model_val
+        classifier = model(
+                num_classes= args.num_classes,
+                num_channel= args.num_channel,
+                ).to(args.device)
+        classifier_val = model_val(
+                num_classes= args.num_classes,
+                num_channel= args.num_channel,
+                ).to(args.device)
     else:
-        from models.resnet import resnet34 as resnet
-        from models.resnet import resnet50 as resnet_val
+        classifier = resnet.resnet34(
+                pretrained=True,
+                )
+        if args.num_channel == 1:
+            classifier.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False) 
+        classifier.fc = nn.Linear(classifier.fc.in_features, args.num_classes)
 
-    classifier = resnet(
-            num_classes= args.num_classes,
-            num_channel= args.num_channel,
-            ).to(args.device)
-    classifier_val = resnet_val(
-            num_classes= args.num_classes,
-            num_channel= args.num_channel,
-            ).to(args.device)
+        torch.hub.list('zhanghang1989/ResNeSt', force_reload=True)
+        classifier_val = torch.hub.load('zhanghang1989/ResNeSt', 'resnest50', pretrained=True)
+        classifier_val.fc = nn.Linear(classifier_val.fc.in_features, args.num_classes)
+
+        classifier = classifier.to(args.device)
+        classifier_val = classifier_val.to(args.device)
+        #  from models.resnet import resnet34 as resnet
+        #  from models.resnet import resnet50 as resnet_val
+
     G = Generator(
             img_size = args.img_size,
             latent_size = args.latent_size,
@@ -536,7 +537,7 @@ def main():
     
     fpath_val = args.ckpt_path + '_valid'
     if os.path.exists(fpath_val):
-        ckpt = load_ckpt(fpath_val, is_best = False)
+        ckpt = load_ckpt(fpath_val, is_best = True)
         classifier_val.load_state_dict(ckpt['model'])
         classifier_val.eval()
         print(f'{fpath_val} model is loaded!')

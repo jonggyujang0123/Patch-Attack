@@ -14,8 +14,8 @@ import numpy as np
 def get_loader_LFW(args, class_wise=False):
     transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.CenterCrop(128),
-        transforms.Resize(64),
+        #  transforms.CenterCrop(128),
+        transforms.Resize(224),
         transforms.ToTensor(),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
     ])

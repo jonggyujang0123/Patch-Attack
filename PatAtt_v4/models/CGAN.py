@@ -20,7 +20,7 @@ class Qrator(nn.Module):
                  n_cont = 0,
                  ):
         super().__init__()
-        assert img_size in [32, 64, 128]
+        assert img_size in [32, 64, 128, 224]
         self.init_size = img_size // (2**levels)
         self.n_disc = n_disc
         self.n_cont = n_cont
@@ -62,7 +62,7 @@ class Generator(nn.Module):
                 emb_dim = 100,
                  ):
         super().__init__()
-        assert img_size in [32, 64, 128]
+        assert img_size in [32, 64, 128, 224]
         self.n_disc = n_disc
         self.n_cont = n_cont
         self.latent_size = latent_size
@@ -74,8 +74,6 @@ class Generator(nn.Module):
                 nn.ConvTranspose2d(emb_dim,
                                    1,
                                    self.init_size, 1, 0),
-                #  nn.BatchNorm2d(n_gf * 2**(levels-1)),
-                #  nn.LeakyReLU(0.2, inplace=True),
                 )
         self.emb_z = nn.Sequential(
                 Rearrange('b c -> b c 1 1'),
@@ -83,6 +81,7 @@ class Generator(nn.Module):
                                    n_gf * 2**(levels)-1,
                                    self.init_size, 1, 0),
                 #  nn.BatchNorm2d(n_gf * 2**(levels-1)),
+                #  nn.ReLU(True),
                 nn.LeakyReLU(0.2, inplace=True),
                 )
 
@@ -96,6 +95,7 @@ class Generator(nn.Module):
                                            n_gf * 2**(levels-layer_ind-1) if layer_ind != levels-1 else n_c,
                                            4, 2, 1, bias=False),
                         nn.BatchNorm2d(n_gf * 2**(levels-layer_ind-1)) if layer_ind != levels-1 else nn.Identity(),
+                        #  nn.ReLU(True), # if layer_ind != levels-1 else nn.Identity(),
                         nn.LeakyReLU(0.2, inplace=True) if layer_ind != levels-1 else nn.Identity(),
                         )
                     )
