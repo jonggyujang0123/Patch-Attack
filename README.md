@@ -80,6 +80,17 @@ python classifier/classifier.py --dataset=cifar10 --train-batch-size=64 --epochs
 python classifier/classifier.py --dataset=cifar10 --browse # browse dataset
 ```
 
+4. (In revision) Pre-trained facial classification dataset and finetuning
+
+```bash
+mkdir data/celeba
+cd data/celeba
+wget --load-cookies ~/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies ~/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1pTw1CZsXK5auEntL5NE490Jsa69dA7cv' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1pTw1CZsXK5auEntL5NE490Jsa69dA7cv" -O neurips2021-celeba-cls.tar.gz && rm -rf ~/cookies.txt
+unzip celeba.zip
+```
+
+1pTw1CZsXK5auEntL5NE490Jsa69dA7cv
+
 ### 2.2. Train Common Generators
 1. Train Gray-scale GAN using HAN dataset.
 ```bash
