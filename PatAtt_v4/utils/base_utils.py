@@ -11,16 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 
-def sample_noise(n_disc, n_cont, n_z, batch_size, device):
+def sample_noise(n_disc, n_z, batch_size, device):
     z = torch.randn(batch_size, n_z, device=device)
     idx = torch.randint(n_disc, size = (batch_size,)).to(device)
     disc_c = F.one_hot(idx, n_disc).float().to(device).view(batch_size, -1)
-    if n_cont != 0:
-        cont_c = torch.rand(batch_size, n_cont, device=device) * 2 - 1
-        #  cont_c = torch.randn(batch_size, n_cont, device=device)
-    else:
-        cont_c = torch.zeros(batch_size, 0).to(device)
-    noise = torch.cat([z, disc_c, cont_c], dim=1)
+    noise = torch.cat([z, disc_c], dim=1)
     return noise, idx
 
 class AddGaussianNoise(nn.Module):
@@ -157,7 +152,7 @@ class CutMix(nn.Module):
         batch_size = x.size()[0]
         index = torch.randperm(batch_size).to(x.device)
         bbx1, bby1, bbx2, bby2 = self.rand_bbox(x.size(), lam)
-        mask = torch.zeros_like(x).to(x.device)
+        mask = torch.zeros([1,1, x.size()[-2], x.size()[-1]]).to(x.device).float()
         mask[:, :, bbx1:bbx2, bby1:bby2] = 1
         x = x * (1-mask) + x[index, ...] * mask
         lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))

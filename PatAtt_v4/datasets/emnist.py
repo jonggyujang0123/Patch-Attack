@@ -77,3 +77,6 @@ def get_loader_emnist(args, class_wise = None):
                                   num_workers = args.num_workers,
                                   pin_memory=args.pin_memory)
         return train_loader, val_loader, test_loader
+
+
+

@@ -13,6 +13,8 @@ from einops import rearrange
 from einops.layers.torch import Rearrange, Reduce
 from torch.nn import functional as F
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
+from models.dla import DLA
 """import target classifier, generator, and discriminator """
 
 
@@ -23,7 +25,7 @@ def para_config():
     # hyperparameter setting
     parser.add_argument("--epochs",
             type=int,
-            default=10)
+            default=200)
     parser.add_argument("--random-seed",
             type=int,
             default=0)
@@ -111,10 +113,19 @@ def para_config():
 
 
 def train(wandb, args, classifier, classifier_val):
+    #  Attacker = nn.Sequential(
+    #          Rearrange('b c -> b c 1 1'),
+    #          nn.ConvTranspose2d(args.n_images,
+    #                             args.num_channel,
+    #                             args.img_size,
+    #                             1, 0, bias=False),
+    #          nn.Tanh()
+    #          ).to(args.device)
+    #  optimizer = optim.Adam(Attacker.parameters(), lr =args.lr, betas = (args.beta_1, args.beta_2))
     Attacker = torch.autograd.Variable(
-            torch.randn(args.n_images, 
-                        args.num_channel, 
-                        args.img_size, 
+            torch.randn(args.n_images,
+                        args.num_channel,
+                        args.img_size,
                         args.img_size).to(args.device),
             requires_grad=True)
     optimizer = optim.Adam([Attacker], lr =args.lr, betas = (args.beta_1, args.beta_2))
@@ -127,39 +138,43 @@ def train(wandb, args, classifier, classifier_val):
             bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
             )
     for epoch in pbar:
-        for _ in range(100):
-            optimizer.zero_grad()
-            logits = classifier(Attacker.tanh())
-            loss_attack = - logits.softmax(1)[:,args.target_class].log().mean()
-            loss_attack.backward()
-            optimizer.step()
+        optimizer.zero_grad()
+        #  inputs = torch.eye(args.n_images).to(args.device)
+        #  logits = classifier(Attacker(inputs))
+        logits = classifier(Attacker.tanh())
+        loss_attack = - logits.softmax(1)[:,args.target_class].log().mean()
+        loss_attack.backward()
+        optimizer.step()
 
-            train_acc = logits.argmax(1).eq(args.target_class).float().mean().item()
-            Loss_attack.update(loss_attack.detach().item(), 1)
-            Acc_total_t.update(train_acc, 1)
+        train_acc = logits.argmax(1).eq(args.target_class).float().mean().item()
+        Loss_attack.update(loss_attack.detach().item(), 1)
+        Acc_total_t.update(train_acc, 1)
         pbar.set_description(f'Ep {epoch}: L_attack : {Loss_attack.avg:2.3f}, lr: {scheduler.get_lr()[0]:.1E}, Acc:{Acc_total_t.avg:2.3f}')
         scheduler.step()
-
-        val_acc, images = evaluate(wandb, args, classifier_val, Attacker, epoch = epoch)
-        if args.wandb_active:
-            wandb.log({
-                    "val_loss" : Loss_attack.avg,
-                    "acc_train" : Acc_total_t.avg,
-                    "val_acc" : val_acc,
-                    "image" : images,
-                    },
-                    step = epoch)
+        if epoch % 10 == 0:
+            val_acc, images = evaluate(wandb, args, classifier_val, Attacker, epoch = epoch)
+            if args.wandb_active:
+                wandb.log({
+                        "val_loss" : Loss_attack.avg,
+                        "acc_train" : Acc_total_t.avg,
+                        "val_acc" : val_acc,
+                        "image" : images,
+                        },
+                        step = epoch)
         Acc_total_t.reset()
         Loss_attack.reset()
     return Attacker
 
 def evaluate(wandb, args, classifier, Attacker, epoch = 0):
-    pred = classifier(Attacker.data.tanh())
+    #  inputs = torch.eye(args.n_images).to(args.device)
+    #  img = Attacker(inputs)
+    img = Attacker.tanh()
+    pred = classifier(img).detach()
     val_acc = pred.argmax(1).eq(args.target_class).float().mean().item()
     if args.num_channel == 1:
-        fake = F.pad(Attacker.data.tanh(), pad = (1,1,1,1), value = 1)
+        fake = F.pad(img, pad = (1,1,1,1), value = 1)
     else:
-        fake = F.pad(Attacker.data.tanh(), pad = (1,1,1,1), value = -1)
+        fake = F.pad(img, pad = (1,1,1,1), value = -1)
     image_array = rearrange(fake[:100, ...], '(b1 b2) c h w -> (b1 h) (b2 w) c', b1 = 10, b2 = 10).cpu().detach().numpy().astype(np.float64)
     images = wandb.Image(image_array, caption=f'Acc is {val_acc*100:2.2f}')
     return val_acc, images
@@ -167,8 +182,9 @@ def evaluate(wandb, args, classifier, Attacker, epoch = 0):
 def save_images(args, Attacker):
     from torchvision.utils import save_image
     import torchvision
-
-    fake = Attacker.data.tanh()
+    #  inputs = torch.eye(args.n_images).to(args.device)
+    #  fake = Attacker(inputs)
+    fake = (1+Attacker.tanh())/2
     directory = f'./Results/General_MI/{args.target_dataset}/{args.target_class}'
     if not os.path.exists(directory):
         os.makedirs(directory)
@@ -199,7 +215,7 @@ def main():
     # Setup Models
 
     classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
-    classifier_val = ResNet34(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
 
     if os.path.exists(args.ckpt_path):
         ckpt = load_ckpt(args.ckpt_path, is_best = True)

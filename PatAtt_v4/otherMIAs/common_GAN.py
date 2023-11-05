@@ -88,6 +88,9 @@ def parse_args():
     if args.dataset in 'HAN':
         args.num_channel = 1
         args.img_size = 32
+    if args.dataset == 'mnist':
+        args.num_channel = 1
+        args.img_size = 32
     if args.dataset == 'cifar100':
         args.num_channel = 3
         args.img_size = 32
@@ -123,11 +126,12 @@ class Generator(nn.Module):
         self.levels = levels
         self.n_c = n_c
 
-        self.init_size = self.img_size // 2**levels
+        self.init_size = self.img_size // 2**(levels)
 
         self.init_block = nn.Sequential(
                 Rearrange('b c -> b c () ()'),
                 nn.ConvTranspose2d(self.latent_size, self.n_gf * 2**levels, self.init_size, 1, 0),
+                nn.BatchNorm2d(self.n_gf * 2**levels),
                 nn.LeakyReLU(0.2, inplace=True),
                 )
         self.deconv = nn.Sequential()
@@ -138,7 +142,8 @@ class Generator(nn.Module):
                         nn.ConvTranspose2d(
                             self.n_gf * 2**(levels-i),
                             self.n_gf * 2**(levels-i-1) if i < levels-1 else self.n_c,
-                            4, 2, 1, bias=False
+                            4, 2, 1,
+                            bias=False if i < levels-1 else True,
                             ),
                         nn.BatchNorm2d(self.n_gf * 2**(levels-i-1)) if i < levels-1 else nn.Identity(),
                         nn.LeakyReLU(0.2, inplace=True) if i < levels-1 else nn.Tanh(),
@@ -153,11 +158,11 @@ class Generator(nn.Module):
 
 def discriminator_block(in_filters, out_filters, bn=True):
     block = [
-            nn.Conv2d(in_filters, out_filters, 3, 2, 1), 
-            nn.LeakyReLU(0.2, inplace=True), 
+            nn.Conv2d(in_filters, out_filters, 4, 2, 1, bias=False), 
+            nn.BatchNorm2d(out_filters) if bn else nn.Identity(),
+            nn.LeakyReLU(0.2, inplace=True),
+            #  nn.Dropout2d(0.25),
             ]
-    if bn:
-        block.append(nn.BatchNorm2d(out_filters))
     return block
 
 class Discriminator(nn.Module):
@@ -229,7 +234,7 @@ def train(wandb, args, G, D):
             b_size = real_img.size(0)
             # Train Discriminator with real image
             output_real = D(real_img)
-            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device)-0.1)
+            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device))
             # Train Discriminator with fake image
             z = torch.randn(b_size, args.latent_size).to(args.device)
             fake_img = G(z)

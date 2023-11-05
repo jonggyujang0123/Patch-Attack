@@ -12,7 +12,8 @@ from einops import rearrange
 import wandb
 import torch.nn.functional as F
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
-
+from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
+from models.dla import DLA
 """ ==========END================"""
 
 
@@ -57,7 +58,7 @@ def parse_args():
             default = 'mnist')
     parser.add_argument("--num-workers", 
             type=int,
-            default = 8)
+            default = 4)
     parser.add_argument("--train-batch-size", 
             type=int,
             default = 256)
@@ -88,7 +89,7 @@ def parse_args():
     args = parser.parse_args()
     #-----------------set image configurations
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if args.dataset == 'mnist':
+    if args.dataset == 'mnist' or args.dataset == 'HAN':
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 10
@@ -96,7 +97,7 @@ def parse_args():
         args.num_channel = 1
         args.img_size = 32
         args.num_classes = 26
-    if args.dataset in ['cifar10','caltech101']:
+    if args.dataset in ['cifar10','caltech101', 'cifar100']:
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
@@ -106,7 +107,7 @@ def parse_args():
 
 def train(wandb, args, model):
     ## Setting 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().to(args.device)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
     train_loader, test_loader, _ = get_data_loader(args=args)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(args.epochs*0.5), int(args.epochs*0.75), int(args.epochs*0.9)], gamma=0.1)
@@ -194,7 +195,10 @@ def evaluate(args, model, val_loader, device):
 
     return acc_t1.avg, acc_t5.avg
 
+
 def browse(wandb, args):
+    import torchvision
+    from torchvision.utils import save_image
     train_loader, _, _ = get_data_loader(args=args, class_wise=True)
     images = []
     for classes in range(10):
@@ -204,6 +208,16 @@ def browse(wandb, args):
             if k > 0:
                 continue
             images.append(image[0:10, :, :, :])
+            dir_name = f'./Results/GT_images/{args.dataset}/{idx[0]}'
+            if not os.path.exists(dir_name):
+                os.makedirs(dir_name)
+            for i in range(image.size(0)):
+                tensor = (image[i, ...].cpu().detach() + 1)/2
+                if args.num_channel == 1:
+                    tensor = torch.cat([tensor, tensor, tensor], dim = 0)
+                save_image(tensor, f'{dir_name}/{i}.png')
+
+
 
     images = torch.cat(images, dim=0)
     images = F.pad(images, pad = (1, 1, 1, 1), value=-1)
@@ -240,7 +254,7 @@ def main():
    
     
     if args.val:
-        model = ResNet34(num_channel=args.num_channel, num_classes=args.num_classes)
+        model = DLA(num_channel=args.num_channel, num_classes=args.num_classes)
         set_random_seeds(random_seed = 0)
     else:
         model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
