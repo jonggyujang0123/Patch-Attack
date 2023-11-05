@@ -12,7 +12,9 @@ from einops import rearrange
 import wandb
 import torch.nn.functional as F
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
-
+from torchvision.models import resnet50, ResNet50_Weights, resnet34, ResNet34_Weights
+from torchvision.models import resnext50_32x4d, ResNeXt50_32X4D_Weights, resnext101_32x8d, ResNeXt101_32X8D_Weights, resnext101_64x4d, ResNeXt101_64X4D_Weights
+from torchvision.models import densenet121, densenet161, densenet169, densenet201
 """ ==========END================"""
 
 
@@ -100,6 +102,10 @@ def parse_args():
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
+    if args.dataset in 'celeba' or args.dataset in 'LFW':
+        args.num_channel = 3
+        args.img_size = 128
+        args.num_classes = 300
     return args
 
 
@@ -107,7 +113,8 @@ def parse_args():
 def train(wandb, args, model):
     ## Setting 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(params, lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
     train_loader, test_loader, _ = get_data_loader(args=args)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(args.epochs*0.5), int(args.epochs*0.75), int(args.epochs*0.9)], gamma=0.1)
     val_acc = .0; best_acc = .0; start_epoch =0
@@ -197,17 +204,18 @@ def evaluate(args, model, val_loader, device):
 def browse(wandb, args):
     train_loader, _, _ = get_data_loader(args=args, class_wise=True)
     images = []
+    n_row = 10
     for classes in range(10):
         print(f'{classes}th class')
         loader = train_loader[classes]
         for k, (image, idx) in enumerate(loader):
             if k > 0:
                 continue
-            images.append(image[0:10, :, :, :])
+            images.append(image[0:n_row, :, :, :])
 
     images = torch.cat(images, dim=0)
     images = F.pad(images, pad = (1, 1, 1, 1), value=-1)
-    images = rearrange(images, '(b1 b2) c h w -> (b2 h) (b1 w) c', b1=10, b2=10).numpy().astype(np.float64)
+    images = rearrange(images, '(b1 b2) c h w -> (b2 h) (b1 w) c', b1=10, b2=n_row).numpy().astype(np.float64)
     images = wandb.Image(images)
     wandb.log({"{args.dataset}": images})
     
@@ -238,13 +246,29 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     args.device = torch.device("cuda:0")
    
-    
-    if args.val:
-        model = ResNet34(num_channel=args.num_channel, num_classes=args.num_classes)
-        set_random_seeds(random_seed = 0)
+    if args.img_size == 32:
+        if args.val:
+            model = ResNet34(num_channel=args.num_channel, num_classes=args.num_classes)
+            set_random_seeds(random_seed = 0)
+        else:
+            model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
+            set_random_seeds(random_seed = 7)
     else:
-        model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
-        set_random_seeds(random_seed = 7)
+        if args.val:
+            model = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+            model.fc = nn.Linear(2048, args.num_classes)
+            #  model = resnext101_32x8d(weights = ResNeXt101_32X8D_Weights.IMAGENET1K_V2)
+            #  model.fc = nn.Linear(2048, args.num_classes)
+            model = nn.Sequential(
+                    nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                    model
+                    )
+            set_random_seeds(random_seed = 0)
+        else:
+            model = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+            model.fc = nn.Linear(2048, args.num_classes)
+            set_random_seeds(random_seed = 7)
+
 
     model = model.to(args.device)
     print(model)

@@ -193,10 +193,10 @@ def para_config():
         args.num_channel = 3
         args.img_size = 64
         args.num_classes = 10
-    if args.target_dataset == 'celeba':
+    if args.dataset in 'celeba':
         args.num_channel = 3
-        args.img_size = 224
-        args.num_classes = 1000
+        args.img_size = 128
+        args.num_classes = 300
 
 
     return args

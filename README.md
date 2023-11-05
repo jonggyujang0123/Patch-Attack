@@ -26,6 +26,7 @@ pip install tqdm easydict wandb imageio tqdm einops torch-fidelity albumentation
 python setup.py develop
 pip install -U git+https://github.com/facebookresearch/fvcore.git
 conda install -c conda-forge torchmetrics
+conda install ipython
 ```
 ### 1.3. Download Dataset
 ```bash
@@ -81,16 +82,17 @@ python classifier/classifier.py --dataset=cifar10 --browse # browse dataset
 ```
 
 4. (In revision) Pre-trained facial classification dataset and finetuning
+    - Target: ResNext50-32x4d (accuracy: 84.59%)
+    - Valid: ResNext50-32x4d (accuracy: 86.76%)
+    - SGD optimier with lr 0.01  
+    - frequentest 300 classes
 
 ```bash
-mkdir data/celeba
-cd data/celeba
-wget --load-cookies ~/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies ~/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1pTw1CZsXK5auEntL5NE490Jsa69dA7cv' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1pTw1CZsXK5auEntL5NE490Jsa69dA7cv" -O neurips2021-celeba-cls.tar.gz && rm -rf ~/cookies.txt
-unzip celeba.zip
+ python classifier/classifier.py --dataset=celeba --train-batch-size=16 --epochs=50 --lr=0.01
+ python classifier/classifier.py --dataset=celeba --train-batch-size=16 --epochs=50 --lr=0.01 --val
+ python classifier/classifier.py --dataset=celeba --browse
+
 ```
-
-1pTw1CZsXK5auEntL5NE490Jsa69dA7cv
-
 ### 2.2. Train Common Generators
 1. Train Gray-scale GAN using HAN dataset.
 ```bash

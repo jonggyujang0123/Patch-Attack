@@ -12,3 +12,7 @@ python classifier/classifier.py --dataset=emnist --browse # browse datasetz
 python classifier/classifier.py --dataset=cifar10 --train-batch-size=64 --epochs=80 --lr=0.025 --cutmix # Target
 python classifier/classifier.py --dataset=cifar10 --train-batch-size=64 --epochs=80 --lr=0.025 --cutmix --val # Validation
 python classifier/classifier.py --dataset=cifar10 --browse # browse dataset
+
+python classifier/classifier.py --dataset=celeba --train-batch-size=16 --epochs=50 --lr=0.01
+python classifier/classifier.py --dataset=celeba --train-batch-size=16 --epochs=50 --lr=0.01 --val
+python classifier/classifier.py --dataset=celeba --browse
