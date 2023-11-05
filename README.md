@@ -23,6 +23,7 @@ conda create -n torch python=3.9
 conda activate torch
 conda install pytorch==1.12.0 torchvision==0.13.0 -c pytorch
 pip install tqdm easydict wandb imageio tqdm einops torch-fidelity albumentations sentence_transformers einops wandb scipy
+pip install pytorch-fid
 python setup.py develop
 pip install -U git+https://github.com/facebookresearch/fvcore.git
 conda install -c conda-forge torchmetrics
@@ -44,42 +45,14 @@ cd Patch-Attack/PatAtt_v4
 ### 2.1. Train Classifiers
 
 **Run By Script**
-
 ```
 sh scripts/run_classfiers.sh
 ```
-
-Or, you can run manually by running the below command.
-
-1. Train MNIST classifiers
-    - Target: ResNet18 (accuracy ~ 99.44%)
-    - Valid: ResNet34 (accuracy ~ 99.58%)
-    - SGD Optimizer with cosineannealing scheduler
-```bash
-python classifier/classifier.py --dataset=mnist --train-batch-size=64 --epochs=20 --lr=0.25 # target
-python classifier/classifier.py --dataset=mnist --train-batch-size=64 --epochs=20 --lr=0.25 --val # validation
-python classifier/classifier.py --dataset=mnist --browse # browse dataset 
-```
-
-2. Train EMNIST Classifiers
-    - Target: ResNet18 (accuracy ~ )
-    - Valid: ResNet34
-    - Adam Optimizer with linearly decaying learning rate
-```bash
-python classifier/classifier.py --dataset=emnist --train-batch-size=64 --epochs=30 --lr=0.25 # target
-python classifier/classifier.py --dataset=emnist --train-batch-size=64 --epochs=30 --lr=0.25 --val # validation
-python classifier/classifier.py --dataset=emnist --browse # browse dataset 
-```
-
-3. Train CIFAR10 Classifiers
-    - Target: ResNet18
-    - Valid: ResNest34
-    - Adam Optimizer with linearly decaying learning rate
-```bash
-python classifier/classifier.py --dataset=cifar10 --train-batch-size=64 --epochs=80 --lr=0.025 --cutmix # Target
-python classifier/classifier.py --dataset=cifar10 --train-batch-size=64 --epochs=80 --lr=0.025 --cutmix --val # Validation
-python classifier/classifier.py --dataset=cifar10 --browse # browse dataset
-```
+Results 
+|Model|MNIST|EMNIST|CIFAR10|
+|---|---|---|---|
+|[ResNet-18](https://arxiv.org/abs/1512.03385) (Target)|99.44%|99.58%|95.07%|
+|[DLA-34](https://arxiv.org/pdf/1707.06484.pdf) (Validation)|99.58%|95.30%|95.51%|
 
 4. (In revision) Pre-trained facial classification dataset and finetuning
     - Target: ResNext50-32x4d (accuracy: 84.59%)
@@ -100,19 +73,17 @@ python otherMIAs/common_GAN.py --levels=3 --latent-size=128 --dataset=HAN --trai
 ```
 2. Train RGB GAN using CIFAR 100 dataset except the labels related to CIFAR 10 dataset.
 ```bash
-python otherMIAs/common_GAN.py --levels=3 --latent-size=128 --dataset=cifar100 --train-batch-size=32 --epochs=100
+python otherMIAs/common_GAN.py --levels=3 --latent-size=128 --dataset=cifar100 --train-batch-size=128 --epochs=100
 ```
 
 
 ## 3. Patch-MIA: Experiments
 
 Implemenation Options 
-|Dataset Options|att|
-|---|---|
-|mnist|GMI|
-|emnist|GANMI|
-|cifar10|VMI|
-| | PMI|
+- mnist
+- emnist
+- cifar10
+
 
 ```bash
 sh script/run_Patch_MI.sh {dataset} {gpu_id}
@@ -137,14 +108,35 @@ sh scripts/run_Generative_MI.sh {dataset} {gpu_id}
 sh scripts/run_VMI.sh {dataset} {gpu_id}
 ```
 ## 5. Evaluation
+att options
+- GMI
+- GANMI
+- VMI
+- PMI
 
 By running the above training, result images are saved in `Patch-Attack/PatAtt_v4/Results/{att}/{dataset}`
 ```bash
 sh scripts/run_eval.sh {dataset} {att} {gpu_id}
 ```
 
+|      |                  | Accuracy (Top1)↑ | Accuracy (Top5)↑ | Confidence ↑ | Precision ↑ | Recall ↑ | Coverage ↑ | Density ↑ | FID ↓    |
+|------|------------------|------------------|------------------|--------------|-------------|----------|------------|-----------|----------|
+|MNIST | GMI              | 0.4754 | 0.9167 | 0.4574 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 407.7958 |
+|      | GANMI            | 0.2775           | 0.8867           | 0.2633       | 0.0041      | 0.1054   | 0.0017     | 0.0008    | 199.6182 |
+|      | VMI              | 93.55            | 99.54            | 0.8802       | 0.0001      | 0.0174   | 0.0000     | 0.0001    | 172.5581 |
+|      | PMI (ours)       |                  |                  |              | 0.0000      |          |            | 0.0001    |          |
+|EMNIST| GMI              | 0.1809 | 0.7436 | 0.1835 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 426.1645 |
+|      | GANMI            | 0.1276           | 0.5789           | 0.1400       | 0.0000      | 0.0000   | 0.0000     | 0.0000    | 496.0510 |
+|      | VMI              | 0.1534           | 0.5972           | 0.1540       | 0.0028      | 0.0222   | 0.0012     | 0.0009    | 184.9981 |
+|      | PMI (ours)       | 0.8887           | 0.9842           | 0.8087       | 0.0015      | 0.0078   | 0.0006     | 0.0005    | 145.6704 |
+|CIFAR | GMI              |                  |                  |              |             |          |            |           |          |
+|      | GANMI            |                  |                  |              |             |          |            |           |          |
+|      | VMI              | 0.1005           | 0.5402           | 0.1077       | 0.0120      | 0.0000   | 0.0040     | 0.0001    | 436.6965 |
+|      | PMI (ours)       | 0.0531           | 0.6795           | 0.0966       | 0.3420      | 0.0001   | 0.1677     | 0.0113    | 341.4110 |
 
 
+
+<!--
 ## 99. Notes
 ### 99.1. Download *CelebA* dataset
 - Download Celeba dataset if original download linke is not available. 
@@ -154,7 +146,7 @@ cd data/celeba
 wget --load-cookies ~/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies ~/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1I7JByq5cA3jeiEgxwtXAOOi8jwupQvCX" -O celeba.zip && rm -rf ~/cookies.txt
 unzip celeba.zip
 ```
-
+-->
 
 ### License:
 This project is licensed under MIT License - see the LICENSE file for details

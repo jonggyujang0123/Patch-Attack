@@ -14,6 +14,8 @@ from einops.layers.torch import Rearrange, Reduce
 from otherMIAs.common_GAN import Generator, Discriminator
 from torch.nn import functional as F
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
+from models.dla import DLA
 """import target classifier, generator, and discriminator """
 
 import argparse
@@ -22,7 +24,7 @@ def para_config():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs',
                         type=int,
-                        default=50)
+                        default=1000)
     parser.add_argument('--n-images',
                         type=int,
                         default=1000)
@@ -64,10 +66,10 @@ def para_config():
                         default='jonggyujang0123')
     parser.add_argument('--eval-every',
                         type=int,
-                        default=5)
+                        default=50)
     parser.add_argument('--num-workers',
                         type=int,
-                        default=8)
+                        default=4)
     parser.add_argument('--pin-memory',
                         type=bool,
                         default=True)
@@ -119,10 +121,13 @@ def train(wandb,  args, classifier, classifier_val, G, D):
                         ).to(args.device),
             requires_grad=True,
             )
-    optimizer = optim.Adam([Attacker], lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(args.epochs * 0.5), int(args.epochs * 0.75)], gamma=0.1)
+    optimizer = optim.SGD([Attacker], lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    #  optimizer = optim.Adam([Attacker], lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.8)
+    #  scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(args.epochs*0.5), int(args.epochs * 0.75)], gamma=0.3)
     # define matter
-    BCELoss = nn.BCELoss()
+    #  BCELoss = nn.BCELoss().to(args.device)
+    BCELoss = nn.BCEWithLogitsLoss().to(args.device)
     Total_attack_loss = AverageMeter()
     Total_loss = AverageMeter()
     Acc_total = AverageMeter()
@@ -131,22 +136,27 @@ def train(wandb,  args, classifier, classifier_val, G, D):
             range(args.epochs),
             bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}',
             )
+    scaler = torch.cuda.amp.GradScaler()
+
     for epoch in pbar:
-        for _ in range(100):
-            optimizer.zero_grad()
+        optimizer.zero_grad()
+        with torch.autocast(device_type='cuda', dtype=torch.float16):
             img = G(Attacker)
             logits = classifier(img)
             attack_loss = - logits.softmax(1)[:, args.target_class].log().mean()
             d_logits = D(img)
             discrim_loss = BCELoss(d_logits, torch.ones_like(d_logits).to(args.device))
             loss = attack_loss + args.w_gan * discrim_loss
-            loss.backward()
-            optimizer.step()
-            
-            train_acc = logits.argmax(1).eq(args.target_class).float().mean().item()
-            Acc_total.update(train_acc, 1)
-            Total_attack_loss.update(attack_loss.item(), 1)
-            Total_loss.update(loss.item(), 1)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        #  loss.backward()
+        #  optimizer.step()
+        
+        train_acc = logits.argmax(1).eq(args.target_class).float().mean().item()
+        Acc_total.update(train_acc, 1)
+        Total_attack_loss.update(attack_loss.item(), 1)
+        Total_loss.update(loss.item(), 1)
         scheduler.step()
         tqdm.write(
                 f'Epoch: {epoch + 1}/{args.epochs} | '
@@ -187,7 +197,7 @@ def save_images(args, Attacker, G):
     from torchvision.utils import save_image
     import torchvision
 
-    fake = G(Attacker)
+    fake = (G(Attacker) + 1) / 2
     directory = f'./Results/Generative_MI/{args.target_dataset}/{args.target_class}'
     if not os.path.exists(directory):
         os.makedirs(directory)
@@ -212,7 +222,7 @@ def main():
 
     # load target classifier
     classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
-    classifier_val = ResNet34(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
 
     if os.path.exists(args.ckpt_path):
         ckpt = load_ckpt(args.ckpt_path, is_best = True)
@@ -245,7 +255,7 @@ def main():
             n_c = args.num_channel
             ).to(args.device)
     if os.path.exists(args.ckpt_path_gan):
-        ckpt = load_ckpt(args.ckpt_path_gan, is_best = True)
+        ckpt = load_ckpt(args.ckpt_path_gan)
         G.load_state_dict(ckpt['model_g'])
         G.eval()
         D.load_state_dict(ckpt['model_d'])

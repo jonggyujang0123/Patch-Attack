@@ -13,6 +13,8 @@ logger = logging.getLogger()
 def get_loader_cifar100(args, class_wise=False):
     transform_train = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
+        #  transforms.RandomRotation(30),
+        #  transforms.RandomResizedCrop((args.img_size, args.img_size), scale= (0.7 , 1.0)),
         #  transforms.TrivialAugmentWide(),
         #  transforms.Pad(4),
         #  transforms.RandomRotation(30),
@@ -60,7 +62,7 @@ def get_loader_cifar100(args, class_wise=False):
             loaders.append(loader)
         return loaders, 0, 0
     else:
-        class_remove = [13,58,81,89,41] 
+        class_remove = [13,58,81,89,41,69, 30, 95, 1, 67, 73, 90] 
         dataset_train_sub = Subset(dataset_train, np.where(np.isin(np.array(dataset_train.targets), class_remove, invert=True))[0])
         train_loader = DataLoader(dataset_train_sub,
                                   sampler=RandomSampler(dataset_train_sub),

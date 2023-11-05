@@ -17,7 +17,8 @@ from einops.layers.torch import Rearrange, Reduce
 from otherMIAs.common_GAN import Generator, Discriminator
 from torch.nn.parameter import Parameter
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
-
+from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
+from models.dla import DLA
 
 
 def para_config():
@@ -26,7 +27,7 @@ def para_config():
     # hyperparameter setting
     parser.add_argument("--epochs",
             type=int,
-            default=60)
+            default=31)
     parser.add_argument("--n-images",
             type=int,
             default=1000)
@@ -328,7 +329,7 @@ def save_images(args, G, miner):
             args.n_images,
             args.latent_size).to(args.device)
     w = miner(z)
-    fake = G(w)
+    fake = ( G(w) + 1 ) / 2
     directory = f'./Results/Variational_MI/{args.target_dataset}/{args.target_class}'
     if not os.path.exists(directory):
         os.makedirs(directory)
@@ -359,7 +360,7 @@ def main():
     set_random_seeds(random_seed = args.random_seed)
 
     classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
-    classifier_val = ResNet34(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
     if os.path.exists(args.ckpt_path):
         ckpt = load_ckpt(args.ckpt_path, is_best = True)
         classifier.load_state_dict(ckpt['model'])
