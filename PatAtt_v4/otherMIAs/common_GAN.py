@@ -94,6 +94,9 @@ def parse_args():
     if args.dataset == 'cifar100':
         args.num_channel = 3
         args.img_size = 32
+    if args.dataset == 'LFW':
+        args.num_channel = 3
+        args.img_size = 128
     return args
 
 def initialize_weights(net):
@@ -234,7 +237,7 @@ def train(wandb, args, G, D):
             b_size = real_img.size(0)
             # Train Discriminator with real image
             output_real = D(real_img)
-            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device))
+            d_loss_real = BCE_loss(output_real, torch.ones(b_size,1).to(args.device) - 0.2)
             # Train Discriminator with fake image
             z = torch.randn(b_size, args.latent_size).to(args.device)
             fake_img = G(z)

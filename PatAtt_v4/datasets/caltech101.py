@@ -171,6 +171,9 @@ def get_loader_caltech101(args, class_wise=False):
     transform_train = transforms.Compose([
         #transforms.RandomResizedCrop((args.img_size, args.img_size), scale= (0.05, 1.0)),
         transforms.ToTensor(),
+        transforms.RandomRotation(90),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.5),
         transforms.CenterCrop(128),
         transforms.Resize((args.img_size, args.img_size)),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5)),
@@ -195,9 +198,9 @@ def get_loader_caltech101(args, class_wise=False):
             loaders.append(loader)
         return loaders, 0, 0
     else:
-        cls_ignore = [2, 19, 40, 97, 71]
-        train_inds = np.where(np.isin(np.array(dataset_train.y), cls_ignore, invert=True))[0]
-        dataset_train = Subset(dataset_train, train_inds)
+        #  cls_ignore = [2, 19, 40, 97, 71]
+        #  train_inds = np.where(np.isin(np.array(dataset_train.y), cls_ignore, invert=True))[0]
+        #  dataset_train = Subset(dataset_train, train_inds)
         train_loader = DataLoader(dataset_train,
                                   sampler=RandomSampler(dataset_train),
                                   batch_size = args.train_batch_size,

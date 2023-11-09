@@ -83,7 +83,7 @@ class Generator(nn.Module):
                     nn.Sequential(
                         nn.ConvTranspose2d(n_gf * 2**(levels-layer_ind),
                                            n_gf * 2**(levels-layer_ind-1) if layer_ind != levels-1 else n_c,
-                                           4, 2, 1, bias=False),
+                                           4, 2, 1, bias=False if layer_ind < levels-1 else True),
                         nn.BatchNorm2d(n_gf * 2**(levels-layer_ind-1)) if layer_ind != levels-1 else nn.Identity(),
                         #  nn.ReLU(True), # if layer_ind != levels-1 else nn.Identity(),
                         nn.LeakyReLU(0.2, inplace=True) if layer_ind != levels-1 else nn.Identity(),

@@ -15,6 +15,7 @@ import pytorch_fid.fid_score
 import torch
 from pytorch_fid.inception import InceptionV3
 import wandb
+from torchvision.models import resnext50_32x4d, ResNeXt50_32X4D_Weights, resnext101_32x8d, ResNeXt101_32X8D_Weights, resnext101_64x4d, ResNeXt101_64X4D_Weights
 
 def argparser():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
@@ -71,6 +72,10 @@ def argparser():
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
+    elif args.target_dataset == 'celeba':
+        args.num_channel = 3
+        args.img_size = 128
+        args.num_classes = 300
     else:
         raise NotImplementedError
 
@@ -273,9 +278,20 @@ def main(args):
             target_dataset.targets[i] = target_dataset.targets[i] - 1
     elif args.target_dataset == 'cifar10':
         target_dataset = datasets.CIFAR10('../data', train=True, download=True, transform=transform)
+    elif args.target_dataset == 'celeba':
+        target_dataset = datasets.CelebA('../data', split='train', download=True, transform=transform)
     else:
         raise NotImplementedError
-    target_classifier = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    if args.img_size == 32:
+        target_classifier = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    else:
+        model = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+        model.fc = nn.Linear(2048, args.num_classes)
+        target_classifier = nn.Sequential(
+                    nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                    model
+                    )
+        target_classifier = target_classifier.to(args.device)
     target_classifier.load_state_dict(torch.load(f'../experiments/classifier/{args.target_dataset}_valid/best.pt')['model'])
     attack_dataset = datasets.ImageFolder(f'./Results/{args.attacker_name}/{args.target_dataset}', transform=transform)
     # compute variance

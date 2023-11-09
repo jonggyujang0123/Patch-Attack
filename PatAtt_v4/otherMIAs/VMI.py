@@ -19,6 +19,8 @@ from torch.nn.parameter import Parameter
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
 from models.dla import DLA
+from models.resnext_32x32 import ResNeXt29_32x4d
+from torchvision.models import resnext50_32x4d, ResNeXt50_32X4D_Weights, resnext101_32x8d, ResNeXt101_32X8D_Weights, resnext101_64x4d, ResNeXt101_64X4D_Weights
 
 
 def para_config():
@@ -36,7 +38,7 @@ def para_config():
             default=256)
     parser.add_argument("--test-batch-size",
             type=int,
-            default=100)
+            default=32)
     parser.add_argument("--random-seed",
             type=int,
             default=0)
@@ -127,6 +129,10 @@ def para_config():
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
+    elif args.target_dataset == 'celeba':
+        args.num_channel = 3
+        args.img_size = 128
+        args.num_classes = 300
     else:
         raise NotImplementedError
     return args
@@ -316,8 +322,8 @@ def evaluate(wandb, args, miner, G, classifier, fixed_z=None, epoch = 0):
         fake = F.pad(img, pad = (1,1,1,1), value = 1)
     else:
         fake = F.pad(img, pad = (1,1,1,1), value = -1)
-    image_array = rearrange(fake[:100,...],
-                            '(b1 b2) c h w -> (b1 h) (b2 w) c', b1 = 10, b2 = 10).cpu().detach().numpy().astype(np.float64)
+    image_array = rearrange(fake[:32,...],
+                            '(b1 b2) c h w -> (b1 h) (b2 w) c', b1 = 8, b2 = 4).cpu().detach().numpy().astype(np.float64)
     images = wandb.Image(image_array, caption = f"Epoch {epoch} : {val_acc:2.3f}")
     return val_acc, images
 
@@ -328,13 +334,13 @@ def save_images(args, G, miner):
     z = torch.randn(
             args.n_images,
             args.latent_size).to(args.device)
-    w = miner(z)
-    fake = ( G(w) + 1 ) / 2
     directory = f'./Results/Variational_MI/{args.target_dataset}/{args.target_class}'
     if not os.path.exists(directory):
         os.makedirs(directory)
     for i in range(args.n_images):
-        tensor = fake[i, ...].cpu().detach()
+        w = miner(z[i, ...].unsqueeze(0))
+        fake = ( G(w) + 1 ) / 2
+        tensor = fake[0,:,:,:].cpu().detach()
         if args.num_channel == 1:
             tensor = torch.cat([tensor, tensor, tensor], dim = 0)
         save_image(tensor, f'{directory}/{i}.png')
@@ -358,9 +364,26 @@ def main():
     # Set Automatic Mixed Precision
     # We need to use seeds to make sure that model initialization same
     set_random_seeds(random_seed = args.random_seed)
+    if args.img_size == 32:
+        classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = ResNeXt29_32x4d(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = VGG19(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = MobileNetV2().to(args.device)
+        classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    else:
+        classifier = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+        classifier.fc = nn.Linear(2048, args.num_classes)
+        classifier = classifier.to(args.device)
+        model = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+        model.fc = nn.Linear(2048, args.num_classes)
+        classifier_val = nn.Sequential(
+                    nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                    model
+                    )
+        classifier_val = classifier_val.to(args.device)
 
-    classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
-    classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    #  classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    #  classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
     if os.path.exists(args.ckpt_path):
         ckpt = load_ckpt(args.ckpt_path, is_best = True)
         classifier.load_state_dict(ckpt['model'])

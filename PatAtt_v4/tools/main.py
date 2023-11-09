@@ -17,6 +17,10 @@ import itertools
 from models.resnet_32x32 import ResNet10, ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from models.densenet import DenseNet121, DenseNet161, DenseNet169, DenseNet201
 from models.dla import DLA
+from torchvision.models import resnext50_32x4d, ResNeXt50_32X4D_Weights, resnext101_32x8d, ResNeXt101_32X8D_Weights, resnext101_64x4d, ResNeXt101_64X4D_Weights
+from models.VGG import VGG11, VGG16, VGG19
+from models.resnext_32x32 import ResNeXt29_32x4d
+from models.mobilnet import MobileNetV2
 def para_config():
     parser = argparse.ArgumentParser(formatter_class = argparse.ArgumentDefaultsHelpFormatter)
 
@@ -170,7 +174,7 @@ def para_config():
         args.num_channel = 3
         args.img_size = 32
         args.num_classes = 10
-    if args.dataset in 'celeba':
+    elif args.target_dataset == 'celeba':
         args.num_channel = 3
         args.img_size = 128
         args.num_classes = 300
@@ -190,6 +194,7 @@ class AUGMENT_FWD(nn.Module):
             args,
             ):
         super(AUGMENT_FWD, self).__init__()
+        self.dataset = args.target_dataset
         if args.target_dataset in ['mnist']:
             self.trans = torch.nn.Sequential(
                     transforms.RandomRotation(20, fill=-1, expand=True),
@@ -232,6 +237,22 @@ class AUGMENT_FWD(nn.Module):
                     )
             self.iterations=4
             self.mean=True
+
+        elif args.target_dataset in ['celeba']:
+            self.trans = torch.nn.Sequential(
+                    #  transforms.Pad(4, fill=-1),
+                    transforms.RandomRotation(5, fill=0, expand=False),
+                    transforms.RandomResizedCrop(args.img_size, scale=(0.9, 1.0), ratio=(0.95, 1.05)),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    #  transforms.RandomCrop(args.img_size),
+                    transforms.RandomAffine(
+                        0,
+                        translate=(0.1, 0.1),
+                        )
+                    #  transforms.RandomCrop(args.img_size),
+                    )
+            self.iterations=1
+            self.mean=True
         else:
             raise NotImplementedError
         print(self.trans)
@@ -244,7 +265,11 @@ class AUGMENT_FWD(nn.Module):
         #  x = [self.trans(x) if torch.rand(1) < 0.5 else x for _ in range(self.iterations)]
         #  for _ in range(self.iterations):
             #  x_list.append(x if
-        x = [x]+ [self.trans(x) for _ in range(self.iterations-1)]
+        if self.dataset == 'celeba':
+            x = [self.trans(x) for _ in range(self.iterations)]
+        else:
+            x = [x]+ [self.trans(x) for _ in range(self.iterations-1)]
+
 
         x = torch.cat(x)
         x = classifier(x)
@@ -300,6 +325,7 @@ def train(wandb, args, classifier, classifier_val, G, D, Q):
             bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}',
             disable = True,
             )
+    #  evaluate(wandb, args, classifier_val, G, D, fixed_z=fixed_z, epoch = 0)
     # Prepare dataset and dataloader
     for epoch in pbar:
         # Switch Training Mode
@@ -432,7 +458,6 @@ def save_images(args, G):
             batch_size = args.n_images,
             device = args.device,
             )
-    fake = (G(z) + 1)/2.0
     dir_name = 'Patch_MI'
     if args.off_patch:
         dir_name = dir_name + '_32'
@@ -444,7 +469,8 @@ def save_images(args, G):
     if not os.path.exists(directory):
         os.makedirs(directory)
     for i in range(args.n_images):
-        tensor = fake[i, ...].cpu().detach()
+        fake = (G(z[i, ...].unsqueeze(0)) + 1) / 2
+        tensor = fake[0, ...].cpu().detach()
         if args.num_channel == 1:
             tensor = torch.cat([tensor, tensor, tensor], dim = 0)
         save_image(tensor, f'{directory}/{i}.png')
@@ -493,8 +519,24 @@ def main():
     set_random_seeds(random_seed = args.random_seed)
     
 
-    classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
-    classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    if args.img_size == 32:
+        classifier = ResNet18(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = ResNeXt29_32x4d(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = VGG19(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+        #  classifier = MobileNetV2().to(args.device)
+        classifier_val = DLA(num_classes = args.num_classes, num_channel = args.num_channel).to(args.device)
+    else:
+        classifier = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+        classifier.fc = nn.Linear(2048, args.num_classes)
+        classifier = classifier.to(args.device)
+        model = resnext50_32x4d(weights = ResNeXt50_32X4D_Weights.IMAGENET1K_V2)
+        model.fc = nn.Linear(2048, args.num_classes)
+        classifier_val = nn.Sequential(
+                    nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                    model
+                    )
+        classifier_val = classifier_val.to(args.device)
+
     if os.path.exists(args.ckpt_path):
         ckpt = load_ckpt(args.ckpt_path, is_best = True)
         classifier.load_state_dict(ckpt['model'])

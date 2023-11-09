@@ -13,6 +13,11 @@ import wandb
 import torch.nn.functional as F
 from models.resnet_32x32 import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from torchvision.models import resnext50_32x4d, ResNeXt50_32X4D_Weights, resnext101_32x8d, ResNeXt101_32X8D_Weights, resnext101_64x4d, ResNeXt101_64X4D_Weights
+from models.dla import DLA
+from models.VGG import VGG11, VGG16, VGG19
+from models.resnext_32x32 import ResNeXt29_32x4d
+from models.shuffle_v2 import ShuffleNetG2
+from models.mobilnet import MobileNetV2
 """ ==========END================"""
 
 
@@ -259,7 +264,12 @@ def main():
             model = DLA(num_channel=args.num_channel, num_classes=args.num_classes)
             set_random_seeds(random_seed = 0)
         else:
-            model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
+            #  model = ResNet18(num_channel=args.num_channel, num_classes=args.num_classes)
+            #  model = ResNet50(num_channel=args.num_channel, num_classes=args.num_classes)
+            #  model = ResNeXt29_32x4d(num_channel=args.num_channel, num_classes=args.num_classes)
+            #  model = VGG19(num_channel=args.num_channel, num_classes=args.num_classes)
+            model = MobileNetV2()
+
             set_random_seeds(random_seed = 7)
     else:
         if args.val:

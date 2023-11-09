@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 def get_loader_celeba(args, class_wise=False):
     transform = transforms.Compose([
+        #  transforms.RandomRotation(45, fill=0, expand=True),
         transforms.CenterCrop(148),
         #  transforms.RandomResizedCrop(224, scale=(0.8, 1.0), ratio=(0.9,1.1)),
         #  transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1),

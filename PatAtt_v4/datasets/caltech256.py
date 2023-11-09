@@ -121,7 +121,10 @@ class Caltech256(VisionDataset):
 def get_loader_caltech256(args, class_wise=False):
     transform_train = transforms.Compose([
         #transforms.RandomResizedCrop((args.img_size, args.img_size), scale= (0.05, 1.0)),
+        transforms.RandomRotation(90),
         transforms.ToTensor(),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.5),
         transforms.CenterCrop(128),
         transforms.Resize((args.img_size, args.img_size)),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5)),
